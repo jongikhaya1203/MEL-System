@@ -1,0 +1,13 @@
+# Baseline security hardening — see the security posture roadmap in README.md
+# for what's intentionally deferred (e.g. a Content-Security-Policy, which
+# needs an inline-style audit first so it doesn't silently break pages).
+
+# Never show a directory listing if a folder has no index.php.
+Options -Indexes
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(self), camera=(self), microphone=()"
+</IfModule>

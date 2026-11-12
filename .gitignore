@@ -1,0 +1,14 @@
+# Local tooling, not part of the project
+.claude/
+
+# Uploaded content (POE documents, indigent signatures/photos) — runtime
+# data, not source. The deny-all .htaccess in each folder is kept (it's a
+# real security control), but the uploaded files themselves aren't tracked.
+storage/poe_uploads/*
+!storage/poe_uploads/.htaccess
+storage/indigent_uploads/*
+!storage/indigent_uploads/.htaccess
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db

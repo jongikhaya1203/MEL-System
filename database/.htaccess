@@ -1,0 +1,12 @@
+# The .sql file here is for manual import via phpMyAdmin/CLI only — it
+# contains a default password hash and shouldn't be downloadable directly.
+# seed_sample_data.php stays reachable; it enforces its own admin login.
+<FilesMatch "\.sql$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
