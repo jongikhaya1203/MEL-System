@@ -38,7 +38,8 @@ if ($dateTo !== null) {
 
 $sql = "SELECT s.id, s.site_code, s.site_name, s.location, s.households_connected, s.completed_date, s.status,
                p.project_name, sub.full_name AS submitted_by_name,
-               (SELECT COUNT(*) FROM site_poe_documents d WHERE d.site_id = s.id) AS poe_count
+               (SELECT COUNT(*) FROM site_poe_documents d WHERE d.site_id = s.id) AS poe_count,
+               EXISTS(SELECT 1 FROM site_acceptance_forms af WHERE af.site_id = s.id) AS has_acceptance
         FROM sites s
         JOIN projects p ON p.id = s.project_id
         JOIN users sub ON sub.id = s.submitted_by";
@@ -157,6 +158,10 @@ include __DIR__ . '/../includes/header.php';
                 <td>
                     <a href="<?= APP_BASE_URL ?>/sites/view.php?id=<?= (int)$s['id'] ?>">View</a> &middot;
                     <a href="<?= APP_BASE_URL ?>/sites/preview.php?id=<?= (int)$s['id'] ?>" target="_blank">Preview</a>
+                    <div style="margin-top:6px;">
+                        <a class="btn btn-secondary btn-sm" style="white-space:nowrap;" href="<?= APP_BASE_URL ?>/sites/acceptance_form.php?id=<?= (int)$s['id'] ?>"
+                           title="Broadband Infrastructure Acceptance Form for <?= e($s['site_name']) ?>">Acceptance form<?= $s['has_acceptance'] ? ' &#10003;' : '' ?></a>
+                    </div>
                 </td>
             </tr>
         <?php endforeach; ?>

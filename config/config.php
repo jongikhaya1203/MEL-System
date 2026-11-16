@@ -31,6 +31,14 @@ define('LOGO_MAX_BYTES', 2 * 1024 * 1024);
 define('INDIGENT_STORAGE_DIR', __DIR__ . '/../storage/indigent_uploads/');
 define('INDIGENT_PHOTO_MAX_BYTES', 5 * 1024 * 1024);
 
+// Broadband Infrastructure Acceptance Form signatures (site + USAASA
+// representative). Same locked-down treatment: deny-all .htaccess, served
+// only through sites/acceptance_signature.php.
+define('ACCEPTANCE_STORAGE_DIR', __DIR__ . '/../storage/acceptance_signatures/');
+// Proof images (backup power, connection speed test) attached to the form.
+// The same folder also holds Broadband pre-assessment site photos and signatures.
+define('ACCEPTANCE_PROOF_MAX_BYTES', 8 * 1024 * 1024);
+
 date_default_timezone_set('Africa/Johannesburg');
 
 if (session_status() === PHP_SESSION_NONE) {

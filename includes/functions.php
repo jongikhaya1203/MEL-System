@@ -955,7 +955,7 @@ function store_household_photo_upload(array $file, ?string &$error): ?string
  * filename, or null if the data URL is empty/malformed (signature left
  * blank — caller decides whether that's acceptable).
  */
-function store_signature_data_url(string $dataUrl): ?string
+function store_signature_data_url(string $dataUrl, string $dir = INDIGENT_STORAGE_DIR): ?string
 {
     if (strpos($dataUrl, 'data:image/png;base64,') !== 0) {
         return null;
@@ -966,15 +966,255 @@ function store_signature_data_url(string $dataUrl): ?string
         return null; // an essentially-blank canvas still encodes to a tiny PNG
     }
 
-    if (!is_dir(INDIGENT_STORAGE_DIR) && !mkdir(INDIGENT_STORAGE_DIR, 0750, true) && !is_dir(INDIGENT_STORAGE_DIR)) {
+    $info = @getimagesizefromstring($bytes);
+    if (!$info || $info[2] !== IMAGETYPE_PNG) {
+        return null; // must genuinely be a PNG, not just claim to be one
+    }
+
+    if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
         return null;
     }
 
     $storedFilename = 'signature_' . bin2hex(random_bytes(16)) . '.png';
-    if (file_put_contents(INDIGENT_STORAGE_DIR . $storedFilename, $bytes) === false) {
+    if (file_put_contents($dir . $storedFilename, $bytes) === false) {
         return null;
     }
     return $storedFilename;
+}
+
+/**
+ * Stores a proof image (JPG/PNG) attached to a Broadband Infrastructure
+ * Acceptance Form — backup power or connection speed evidence. Returns the
+ * stored filename, or null with $error left null when no file was chosen
+ * (attaching is optional on each save), or null with $error set on failure.
+ */
+function store_acceptance_proof_upload(array $file, ?string &$error): ?string
+{
+    $error = null;
+    $allowed = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png'];
+
+    if (!isset($file['error']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+        return null;
+    }
+    if ($file['error'] === UPLOAD_ERR_INI_SIZE || $file['error'] === UPLOAD_ERR_FORM_SIZE) {
+        $error = 'The image is too large (maximum ' . (ACCEPTANCE_PROOF_MAX_BYTES / 1024 / 1024) . ' MB).';
+        return null;
+    }
+    if ($file['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($file['tmp_name'])) {
+        $error = 'The image upload failed. Please try again.';
+        return null;
+    }
+    if ($file['size'] <= 0 || $file['size'] > ACCEPTANCE_PROOF_MAX_BYTES) {
+        $error = 'The image must be larger than 0 bytes and no more than ' . (ACCEPTANCE_PROOF_MAX_BYTES / 1024 / 1024) . ' MB.';
+        return null;
+    }
+
+    $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $detectedMime = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+    if (!isset($allowed[$extension]) || $allowed[$extension] !== $detectedMime) {
+        $error = 'Only JPG or PNG images are allowed as proof.';
+        return null;
+    }
+
+    if (!is_dir(ACCEPTANCE_STORAGE_DIR) && !mkdir(ACCEPTANCE_STORAGE_DIR, 0750, true) && !is_dir(ACCEPTANCE_STORAGE_DIR)) {
+        $error = 'Could not prepare storage for the upload.';
+        return null;
+    }
+
+    $storedFilename = 'proof_' . bin2hex(random_bytes(16)) . '.' . ($extension === 'jpeg' ? 'jpg' : $extension);
+    if (!move_uploaded_file($file['tmp_name'], ACCEPTANCE_STORAGE_DIR . $storedFilename)) {
+        $error = 'Could not save the uploaded image.';
+        return null;
+    }
+    return $storedFilename;
+}
+
+// ---------------------------------------------------------------------------
+// Broadband rollout register + pre-assessment helpers (broadband/*).
+// ---------------------------------------------------------------------------
+
+function broadband_site_types(): array
+{
+    return ['School', 'Hotspot', 'Clinic', 'Library', 'Other'];
+}
+
+function rollout_statuses(): array
+{
+    return ['Awaiting Pre-assessment', 'Pre-assessed', 'Approved for Rollout', 'Rolled Out', 'Cancelled'];
+}
+
+function rollout_status_badge(string $status): string
+{
+    $classes = [
+        'Awaiting Pre-assessment' => 'badge badge-open',
+        'Pre-assessed'            => 'badge badge-progress',
+        'Approved for Rollout'    => 'badge badge-level-impact',
+        'Rolled Out'              => 'badge badge-closed',
+        'Cancelled'               => 'badge badge-overdue',
+    ];
+    return '<span class="' . ($classes[$status] ?? 'badge') . '">' . e($status) . '</span>';
+}
+
+/** Deployment / connectivity state of a rollout site => [label, colour] (colours also used for map markers). */
+function connectivity_statuses(): array
+{
+    return [
+        'New'     => ['label' => 'New — not deployed', 'color' => '#d93025'],
+        'Online'  => ['label' => 'Online — deployed',  'color' => '#1e8e3e'],
+        'Offline' => ['label' => 'Offline',            'color' => '#f29900'],
+    ];
+}
+
+/** Roles allowed to change a site's New / Online / Offline state. */
+function can_change_connectivity(string $role): bool
+{
+    return in_array($role, ['admin', 'manager', 'planner', 'field_worker', 'back_office'], true);
+}
+
+function next_rollout_reference_code(PDO $pdo): string
+{
+    $prefix = 'USAASA-BB-' . date('Y') . '-';
+    $stmt = $pdo->prepare('SELECT reference_code FROM broadband_rollout_sites WHERE reference_code LIKE ? ORDER BY id DESC LIMIT 1');
+    $stmt->execute([$prefix . '%']);
+    $last = $stmt->fetchColumn();
+    $parts = $last ? explode('-', $last) : [];
+    $next = $last ? (int)end($parts) + 1 : 1;
+    return $prefix . str_pad((string)$next, 4, '0', STR_PAD_LEFT);
+}
+
+/** Lower-cases a municipality name and strips accents, punctuation and "District/Local/Metropolitan Municipality" wording, for loose matching. */
+function sa_municipality_key(string $name): string
+{
+    $s = strtolower(trim($name));
+    $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+    if ($ascii !== false && $ascii !== '') {
+        $s = $ascii;
+    }
+    $s = preg_replace('/\b(metropolitan|metro|district|local|municipality|municipal|dm|lm)\b/', ' ', $s);
+    return preg_replace('/[^a-z0-9]/', '', $s);
+}
+
+/**
+ * Matches free-text district / local municipality names (as typed in an import
+ * file) against sa_municipal_structure(). Returns the canonical province,
+ * district and local names where they can be determined, plus notes about
+ * anything that could not be matched (the raw text is kept in that case).
+ */
+function sa_match_municipality(string $district, string $local): array
+{
+    $dKey = $district !== '' ? sa_municipality_key($district) : '';
+    $lKey = $local !== '' ? sa_municipality_key($local) : '';
+    $out = ['province' => null, 'district' => $district !== '' ? $district : null, 'local' => $local !== '' ? $local : null, 'notes' => []];
+
+    $districtHits = [];
+    $localHits = [];
+    foreach (sa_municipal_structure() as $province => $rows) {
+        foreach ($rows as $row) {
+            if ($dKey !== '' && sa_municipality_key($row['district']) === $dKey) {
+                $districtHits[] = [$province, $row];
+            }
+            foreach ($row['locals'] as $lm) {
+                if ($lKey !== '' && sa_municipality_key($lm) === $lKey) {
+                    $localHits[] = [$province, $row['district'], $lm];
+                }
+            }
+        }
+    }
+
+    if (count($districtHits) === 1) {
+        [$province, $row] = $districtHits[0];
+        $out['province'] = $province;
+        $out['district'] = $row['district'];
+        foreach ($row['locals'] as $lm) {
+            if ($lKey !== '' && sa_municipality_key($lm) === $lKey) {
+                $out['local'] = $lm;
+                return $out;
+            }
+        }
+        if ($lKey !== '') {
+            $out['notes'][] = "local municipality \"$local\" is not in {$row['district']} — kept as typed";
+        } elseif ($row['type'] === 'metro') {
+            $out['local'] = $row['locals'][0]; // a metro is its own local municipality
+        }
+        return $out;
+    }
+
+    // District not recognised: fall back to the local municipality, if it is unambiguous.
+    if (count($localHits) === 1) {
+        [$out['province'], $out['district'], $out['local']] = $localHits[0];
+        if ($dKey !== '') {
+            $out['notes'][] = "district \"$district\" not recognised — taken from local municipality as {$out['district']}";
+        }
+        return $out;
+    }
+    if (count($localHits) > 1) {
+        $out['notes'][] = "local municipality \"$local\" exists in more than one district — please check the district";
+    } elseif ($dKey !== '' || $lKey !== '') {
+        $out['notes'][] = 'district / local municipality not recognised — kept as typed, province left blank';
+    }
+    return $out;
+}
+
+/**
+ * Parses a GPS cell into [lat, lng] decimal degrees. Accepts "-25.74, 28.19",
+ * "S25.74 E28.19", "25.74S 28.19E" and degrees-minutes-seconds such as
+ * 25°44'46"S 28°11'17"E. Returns null if two coordinates can't be read.
+ */
+function parse_gps_pair(string $raw): ?array
+{
+    $raw = trim(str_replace(['′', '″', '’', '”', 'º'], ["'", '"', "'", '"', '°'], $raw));
+    if ($raw === '') {
+        return null;
+    }
+    $raw = preg_replace('/(\d)\.\s+(\d)/', '$1.$2', $raw);          // "29. 73828" -> "29.73828"
+    $raw = preg_replace('/(\d)\s*;\s*(\d{1,2}(?:\.\d+)?\s*")/', "$1'$2", $raw); // 24'19;45" -> 24'19'45"
+    $raw = preg_replace('/(\d{1,3})\'(\d{2})(\d{2})"/', "$1'$2'$3\"", $raw);    // 29'4925" -> 29'49'25"
+    // Spreadsheet-style DMS with apostrophes instead of a degree sign: 24'34'56" 30'19'21" (or a stray ' as the final mark).
+    if (strpos($raw, '°') === false
+        && preg_match_all('/([NSEW])?\s*(-?\d{1,3})\s*\'\s*(\d{1,2}(?:\.\d+)?)\s*\'\s*(\d{1,2}(?:\.\d+)?)\s*(?:"|\'\'|\')?\s*([NSEW])?/i', $raw, $m, PREG_SET_ORDER) === 2) {
+        $values = [];
+        foreach ($m as $g) {
+            $val = abs((float)$g[2]) + (float)$g[3] / 60 + (float)$g[4] / 3600;
+            $hemi = strtoupper(($g[1] ?? '') . ($g[5] ?? ''));
+            $values[] = (strpos($g[2], '-') === 0 || strpbrk($hemi, 'SW') !== false) ? -$val : $val;
+        }
+        return $values;
+    }
+    // Hemisphere letters are either all leading ("S25 E28") or all trailing ("25S 28E") — decide which first.
+    $leading = (bool)preg_match('/^[NSEW]/i', $raw);
+    $num = '(-?\d+(?:\.\d+)?)';
+    $values = [];
+    if (strpos($raw, '°') !== false) {
+        $dms = $num . '\s*°\s*(?:(\d+(?:\.\d+)?)\s*\'\s*)?(?:(\d+(?:\.\d+)?)\s*"\s*)?';
+        $pattern = $leading ? '/([NSEW])\s*' . $dms . '/iu' : '/()' . $dms . '\s*([NSEW])?/iu';
+        preg_match_all($pattern, $raw, $m, PREG_SET_ORDER);
+        foreach ($m as $g) {
+            $val = abs((float)$g[2]) + (float)($g[3] ?? 0) / 60 + (float)($g[4] ?? 0) / 3600;
+            $hemi = strtoupper($g[1] . ($g[5] ?? ''));
+            $values[] = (strpos($g[2], '-') === 0 || strpbrk($hemi, 'SW') !== false) ? -$val : $val;
+        }
+    } else {
+        // Decimal degrees separated by comma, semicolon, slash or whitespace (decimal point must be ".").
+        $pattern = $leading ? '/([NSEW])\s*' . $num . '/i' : '/()' . $num . '\s*([NSEW])?/i';
+        preg_match_all($pattern, $raw, $m, PREG_SET_ORDER);
+        foreach ($m as $g) {
+            $val = (float)$g[2];
+            $hemi = strtoupper($g[1] . ($g[3] ?? ''));
+            $values[] = strpbrk($hemi, 'SW') !== false ? -abs($val) : $val;
+        }
+    }
+    if (count($values) !== 2) {
+        return null;
+    }
+    return [$values[0], $values[1]];
+}
+
+/** Filenames written by store_signature_data_url() / store_acceptance_proof_upload() — used before serving or deleting one. */
+function is_broadband_upload_filename($filename): bool
+{
+    return is_string($filename) && (bool)preg_match('/^(signature|proof)_[0-9a-f]{32}\.(png|jpg)$/', $filename);
 }
 
 /** South African provinces — the one part of the address hierarchy stable enough to hardcode. */
@@ -1043,7 +1283,39 @@ function xlsx_col_to_index(string $ref): int
 }
 
 /** Minimal single-sheet XLSX reader: ZipArchive + SimpleXML, no library. */
-function parse_xlsx_first_sheet(string $path): array
+/**
+ * Every worksheet in an .xlsx, in workbook order: [sheet name => rows]. Used by imports where a
+ * workbook holds one list per sheet (e.g. a sheet per district).
+ */
+function parse_xlsx_all_sheets(string $path): array
+{
+    $zip = new ZipArchive();
+    if ($zip->open($path) !== true) {
+        throw new RuntimeException('Could not open the uploaded file as an Excel workbook.');
+    }
+    $workbook = $zip->getFromName('xl/workbook.xml');
+    $rels = $zip->getFromName('xl/_rels/workbook.xml.rels');
+    $zip->close();
+    $targets = [];
+    if ($rels !== false) {
+        foreach ((new SimpleXMLElement($rels))->Relationship as $rel) {
+            $targets[(string)$rel['Id']] = ltrim(preg_replace('#^/?xl/#', '', (string)$rel['Target']), '/');
+        }
+    }
+    $sheets = [];
+    if ($workbook !== false) {
+        $wb = new SimpleXMLElement($workbook);
+        foreach ($wb->sheets->sheet as $s) {
+            $rid = (string)$s->attributes('http://schemas.openxmlformats.org/officeDocument/2006/relationships')['id'];
+            if (isset($targets[$rid])) {
+                $sheets[(string)$s['name']] = parse_xlsx_first_sheet($path, 'xl/' . $targets[$rid]);
+            }
+        }
+    }
+    return $sheets ?: ['Sheet1' => parse_xlsx_first_sheet($path)];
+}
+
+function parse_xlsx_first_sheet(string $path, string $sheetPath = 'xl/worksheets/sheet1.xml'): array
 {
     $zip = new ZipArchive();
     if ($zip->open($path) !== true) {
@@ -1067,7 +1339,7 @@ function parse_xlsx_first_sheet(string $path): array
         }
     }
 
-    $sheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
+    $sheetXml = $zip->getFromName($sheetPath);
     $zip->close();
     if ($sheetXml === false) {
         throw new RuntimeException('Could not find a worksheet in the uploaded file.');
@@ -1110,7 +1382,54 @@ function yn_to_bool(string $v): int
  * Reads an uploaded CSV or .xlsx file into data rows (header row stripped).
  * Returns null and sets $error on failure.
  */
-function read_import_rows(array $file, ?string &$error): ?array
+/** Reads the first <table> of an HTML-table ".xls" (as written by this app's Excel exports). Null if the file isn't HTML. */
+function parse_html_table_xls(string $path): ?array
+{
+    $html = (string)file_get_contents($path);
+    $html = preg_replace('/^\xEF\xBB\xBF/', '', $html);
+    if (stripos(ltrim($html), '<') !== 0 || stripos($html, '<table') === false) {
+        return null;
+    }
+    $doc = new DOMDocument();
+    libxml_use_internal_errors(true);
+    $doc->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NONET);
+    libxml_clear_errors();
+    $table = $doc->getElementsByTagName('table')->item(0);
+    if (!$table) {
+        return null;
+    }
+    $rows = [];
+    foreach ($table->getElementsByTagName('tr') as $tr) {
+        $cells = [];
+        foreach ($tr->childNodes as $cell) {
+            if ($cell instanceof DOMElement && in_array(strtolower($cell->tagName), ['td', 'th'], true)) {
+                $cells[] = trim($cell->textContent);
+            }
+        }
+        $rows[] = $cells;
+    }
+    return $rows;
+}
+
+/** Like parse_import_date(), but also understands Excel date serial numbers (e.g. 46022 = 2026-01-01). */
+function parse_import_date_or_serial(string $raw): ?string
+{
+    $raw = trim($raw);
+    if (preg_match('/^\d{5}(\.\d+)?$/', $raw) && (float)$raw > 20000 && (float)$raw < 80000) {
+        return gmdate('Y-m-d', ((int)$raw - 25569) * 86400);
+    }
+    // Day-first dates (31/03/2027) as used in South Africa; strtotime would read 03/31 as month-first.
+    if (preg_match('#^(\d{1,2})[/.](\d{1,2})[/.](\d{4})$#', $raw, $m)) {
+        return checkdate((int)$m[2], (int)$m[1], (int)$m[3]) ? sprintf('%04d-%02d-%02d', $m[3], $m[2], $m[1]) : null;
+    }
+    // ISO dates must be real calendar dates (strtotime would roll 2027-02-30 over to 2 March).
+    if (preg_match('#^(\d{4})-(\d{1,2})-(\d{1,2})( .*)?$#', $raw, $m)) {
+        return checkdate((int)$m[2], (int)$m[3], (int)$m[1]) ? sprintf('%04d-%02d-%02d', $m[1], $m[2], $m[3]) : null;
+    }
+    return parse_import_date($raw);
+}
+
+function read_import_rows(array $file, ?string &$error, bool $keepHeader = false): ?array
 {
     if (!$file || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
         $error = 'Please choose a CSV or Excel (.xlsx) file to import.';
@@ -1120,8 +1439,12 @@ function read_import_rows(array $file, ?string &$error): ?array
     try {
         if ($extension === 'csv') {
             $handle = fopen($file['tmp_name'], 'r');
-            fgetcsv($handle); // header row, discarded — column order is fixed
             $rows = [];
+            $header = fgetcsv($handle); // header row, discarded unless the caller maps columns by name
+            if ($keepHeader && $header !== false) {
+                $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string)$header[0]); // Excel's UTF-8 BOM
+                $rows[] = $header;
+            }
             while (($row = fgetcsv($handle)) !== false) {
                 $rows[] = $row;
             }
@@ -1130,9 +1453,18 @@ function read_import_rows(array $file, ?string &$error): ?array
         }
         if ($extension === 'xlsx') {
             $allRows = parse_xlsx_first_sheet($file['tmp_name']);
-            return array_slice($allRows, 1); // drop header row
+            return $keepHeader ? $allRows : array_slice($allRows, 1); // drop header row
         }
-        $error = 'Only .csv or .xlsx files can be imported (not .xls or .pdf — those are export-only formats here).';
+        if ($extension === 'xls') {
+            // This app's own "Export Excel" files are HTML tables saved as .xls — those can be read back.
+            $allRows = parse_html_table_xls($file['tmp_name']);
+            if ($allRows === null) {
+                $error = 'That .xls file is in the old binary Excel format, which can\'t be read — open it in Excel and use Save As → Excel Workbook (.xlsx), then import the .xlsx.';
+                return null;
+            }
+            return $keepHeader ? $allRows : array_slice($allRows, 1);
+        }
+        $error = 'Only .csv, .xlsx (or this system\'s own exported .xls) files can be imported.';
         return null;
     } catch (Throwable $e) {
         $error = 'Could not read that file: ' . $e->getMessage();

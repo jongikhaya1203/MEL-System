@@ -43,7 +43,10 @@ include __DIR__ . '/../includes/header.php';
         <p class="subtitle">Indicators grouped by project, result level and result statement &mdash; see the <a href="<?= APP_BASE_URL ?>/indicators/list.php">flat register</a> to filter/search individual indicators</p>
     </div>
     <?php if (in_array(current_user()['role'], ['admin', 'manager'], true)): ?>
-        <a class="btn" href="<?= APP_BASE_URL ?>/indicators/form.php">+ New indicator</a>
+        <div class="actions-row" style="margin:0;">
+            <a class="btn btn-secondary" href="<?= APP_BASE_URL ?>/indicators/import.php">Import CSV / Excel</a>
+            <a class="btn" href="<?= APP_BASE_URL ?>/indicators/form.php">+ New indicator</a>
+        </div>
     <?php endif; ?>
 </div>
 

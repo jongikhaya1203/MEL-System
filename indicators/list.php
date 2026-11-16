@@ -115,6 +115,7 @@ include __DIR__ . '/../includes/header.php';
     <div class="actions-row">
         <a class="btn btn-secondary" href="<?= APP_BASE_URL ?>/indicators/export.php?format=csv&<?= $queryString ?>">Export CSV</a>
         <a class="btn btn-secondary" href="<?= APP_BASE_URL ?>/indicators/export.php?format=excel&<?= $queryString ?>">Export Excel</a>
+        <a class="btn btn-secondary" href="<?= APP_BASE_URL ?>/indicators/import.php">Import indicators</a>
         <a class="btn btn-secondary" href="<?= APP_BASE_URL ?>/indicators/print.php?<?= $queryString ?>" target="_blank">Export / print PDF</a>
     </div>
     <p class="hint" style="margin-top:8px;">These export the current filter above (every row matching it).</p>

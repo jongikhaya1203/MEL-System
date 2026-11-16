@@ -9,6 +9,8 @@ $MODULE_LABELS = [
     'sites' => 'Site Completions',
     'indigent_applications' => 'Indigent Applications',
     'installer_allocations' => 'Planning & Dispatch',
+    'broadband_rollout' => 'Broadband — New Sites Awaiting Rollout',
+    'indicators' => 'Results Framework (Indicators)',
 ];
 
 // --- Import activity -------------------------------------------------------

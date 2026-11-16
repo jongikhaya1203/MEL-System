@@ -62,6 +62,12 @@ function module_access_definitions(): array
             'Submit a completed site' => ['roles' => ['admin', 'field_worker']],
             'Verify a submitted site' => ['roles' => ['admin', 'back_office']],
             'Approve a verified site' => ['roles' => ['admin', 'approver']],
+            'Complete / sign a Broadband Infrastructure Acceptance Form' => ['roles' => ['admin', 'manager', 'field_worker', 'back_office', 'approver']],
+        ]],
+        'Broadband Rollout & Pre-Assessment' => ['key' => 'broadband', 'href' => '/broadband/rollout_list.php', 'match' => ['dir' => 'broadband'], 'levels' => [
+            'View' => ['roles' => ['all']],
+            'Register / edit new sites awaiting rollout' => ['roles' => ['admin', 'manager', 'planner']],
+            'Complete / sign a site pre-assessment form' => ['roles' => ['admin', 'manager', 'planner', 'field_worker', 'back_office']],
         ]],
         'Indigent Applications' => ['key' => 'indigent', 'href' => '/indigent/list.php', 'match' => ['dir' => 'indigent'], 'levels' => [
             'View' => ['roles' => ['all']],

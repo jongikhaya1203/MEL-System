@@ -383,6 +383,189 @@ CREATE TABLE IF NOT EXISTS site_poe_documents (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Broadband Infrastructure Acceptance Form — one per site (UNIQUE site_id).
+-- Captured/edited from sites/acceptance_form.php and printed for wet-ink
+-- signature by the site representative and the USAASA representative.
+-- Y/N answers are stored as 'Y' / 'N' (NULL = not yet answered).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_acceptance_forms (
+    id                      INT AUTO_INCREMENT PRIMARY KEY,
+    site_id                 INT NOT NULL UNIQUE,
+
+    project_name            VARCHAR(255) NULL,
+
+    site_name               VARCHAR(255) NULL,
+    site_type               ENUM('School','Hotspot','Clinic','Library','Other') NULL,
+    site_type_other         VARCHAR(150) NULL,
+    official_site_id        VARCHAR(100) NULL,
+    province                VARCHAR(100) NULL,
+    district_municipality   VARCHAR(150) NULL,
+    local_municipality      VARCHAR(150) NULL,
+    town_village            VARCHAR(255) NULL,
+    latitude                VARCHAR(30)  NULL,
+    longitude               VARCHAR(30)  NULL,
+
+    service_provider        VARCHAR(255) NULL,
+    installing_company      VARCHAR(255) NULL,
+
+    installation_neat       CHAR(1) NULL,
+    dedicated_power_plug    CHAR(1) NULL,
+    poe_enclosure_installed CHAR(1) NULL,
+    secure_room             CHAR(1) NULL,
+    adapter_mounted         CHAR(1) NULL,
+    mounted                 CHAR(1) NULL,
+
+    wifi_vsat               CHAR(1) NULL,
+    wifi_terrestrial        CHAR(1) NULL,
+
+    site_rep_date           DATE NULL,
+    site_rep_name           VARCHAR(150) NULL,
+    site_rep_designation    VARCHAR(150) NULL,
+    site_rep_contact        VARCHAR(50)  NULL,
+
+    usaasa_rep_date         DATE NULL,
+    usaasa_rep_name         VARCHAR(150) NULL,
+    usaasa_rep_designation  VARCHAR(150) NULL,
+    usaasa_rep_contact      VARCHAR(50)  NULL,
+
+    -- Backup power + connection speed, each with a proof image
+    -- (JPG/PNG filename in storage/acceptance_signatures/).
+    backup_power            CHAR(1) NULL,
+    backup_power_type       VARCHAR(150) NULL,
+    backup_power_proof      VARCHAR(255) NULL,
+    download_speed_mbps     DECIMAL(10,2) NULL,
+    upload_speed_mbps       DECIMAL(10,2) NULL,
+    speed_proof             VARCHAR(255) NULL,
+
+    -- On-screen signatures: PNG filenames in storage/acceptance_signatures/
+    site_rep_signature      VARCHAR(255) NULL,
+    site_rep_signed_at      DATETIME NULL,
+    usaasa_rep_signature    VARCHAR(255) NULL,
+    usaasa_rep_signed_at    DATETIME NULL,
+
+    updated_by              INT NULL,
+    created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_acceptance_site       FOREIGN KEY (site_id)    REFERENCES sites(id) ON DELETE CASCADE,
+    CONSTRAINT fk_acceptance_updated_by FOREIGN KEY (updated_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS site_rep_signature   VARCHAR(255) NULL AFTER usaasa_rep_contact;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS site_rep_signed_at   DATETIME NULL     AFTER site_rep_signature;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS usaasa_rep_signature VARCHAR(255) NULL AFTER site_rep_signed_at;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS usaasa_rep_signed_at DATETIME NULL     AFTER usaasa_rep_signature;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS backup_power         CHAR(1) NULL      AFTER wifi_terrestrial;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS backup_power_type    VARCHAR(150) NULL AFTER backup_power;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS backup_power_proof   VARCHAR(255) NULL AFTER backup_power_type;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS download_speed_mbps  DECIMAL(10,2) NULL AFTER backup_power_proof;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS upload_speed_mbps    DECIMAL(10,2) NULL AFTER download_speed_mbps;
+ALTER TABLE site_acceptance_forms ADD COLUMN IF NOT EXISTS speed_proof          VARCHAR(255) NULL AFTER upload_speed_mbps;
+
+-- ---------------------------------------------------------------------------
+-- Broadband rollout register — new sites identified for connection that are
+-- awaiting rollout. Each one gets a pre-assessment (site survey) before
+-- installation; once installed it is submitted through Site Completions.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS broadband_rollout_sites (
+    id                      INT AUTO_INCREMENT PRIMARY KEY,
+    reference_code          VARCHAR(50)  NOT NULL UNIQUE,
+    project_id              INT NOT NULL,
+
+    site_name               VARCHAR(255) NOT NULL,
+    site_type               ENUM('School','Hotspot','Clinic','Library','Other') NULL,
+    site_type_other         VARCHAR(150) NULL,
+    official_site_id        VARCHAR(100) NULL,
+    province                VARCHAR(100) NULL,
+    district_municipality   VARCHAR(150) NULL,
+    local_municipality      VARCHAR(150) NULL,
+    town_village            VARCHAR(255) NULL,
+    latitude                VARCHAR(30)  NULL,
+    longitude               VARCHAR(30)  NULL,
+
+    contact_details         VARCHAR(255) NULL,
+
+    service_provider        VARCHAR(255) NULL,
+    planned_rollout_date    DATE NULL,
+    status                  ENUM('Awaiting Pre-assessment','Pre-assessed','Approved for Rollout','Rolled Out','Cancelled')
+                            NOT NULL DEFAULT 'Awaiting Pre-assessment',
+    notes                   TEXT NULL,
+
+    created_by              INT NOT NULL,
+    created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_rollout_project    FOREIGN KEY (project_id) REFERENCES projects(id),
+    CONSTRAINT fk_rollout_created_by FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+ALTER TABLE broadband_rollout_sites ADD COLUMN IF NOT EXISTS contact_details VARCHAR(255) NULL AFTER longitude;
+
+-- Deployment / connectivity state shown on the list and the map:
+--   New = not yet deployed (red), Online = deployed and connected (green), Offline = deployed but down (orange).
+ALTER TABLE broadband_rollout_sites ADD COLUMN IF NOT EXISTS connectivity_status ENUM('New','Online','Offline') NOT NULL DEFAULT 'New' AFTER status;
+ALTER TABLE broadband_rollout_sites ADD COLUMN IF NOT EXISTS connectivity_changed_at DATETIME NULL AFTER connectivity_status;
+ALTER TABLE broadband_rollout_sites ADD COLUMN IF NOT EXISTS connectivity_changed_by INT NULL AFTER connectivity_changed_at;
+
+-- ---------------------------------------------------------------------------
+-- Broadband site pre-assessment form — one per rollout site (UNIQUE).
+-- Y/N answers stored as 'Y' / 'N' (NULL = not answered). Site photo and
+-- signatures are files in storage/acceptance_signatures/ (shared, locked
+-- down broadband uploads folder), served by broadband/pa_file.php.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_pre_assessments (
+    id                      INT AUTO_INCREMENT PRIMARY KEY,
+    rollout_site_id         INT NOT NULL UNIQUE,
+    assessment_date         DATE NULL,
+
+    contact_name            VARCHAR(150) NULL,
+    contact_designation     VARCHAR(150) NULL,
+    contact_number          VARCHAR(50)  NULL,
+    contact_email           VARCHAR(150) NULL,
+
+    mains_power             CHAR(1) NULL,
+    power_stable            CHAR(1) NULL,
+    backup_power            CHAR(1) NULL,
+    secure_room             CHAR(1) NULL,
+    mounting_location       CHAR(1) NULL,
+    line_of_sight           CHAR(1) NULL,
+    existing_connectivity   CHAR(1) NULL,
+    site_accessible         CHAR(1) NULL,
+    permission_granted      CHAR(1) NULL,
+
+    recommended_technology  ENUM('VSAT','Terrestrial','Fibre','Fixed Wireless','Other') NULL,
+    recommended_tech_other  VARCHAR(150) NULL,
+    mobile_signal           VARCHAR(100) NULL,
+    estimated_users         INT NULL,
+    additional_requirements TEXT NULL,
+    site_photo              VARCHAR(255) NULL,
+
+    suitable_for_rollout    CHAR(1) NULL,
+    comments                TEXT NULL,
+
+    assessor_date           DATE NULL,
+    assessor_name           VARCHAR(150) NULL,
+    assessor_designation    VARCHAR(150) NULL,
+    assessor_contact        VARCHAR(50)  NULL,
+    assessor_signature      VARCHAR(255) NULL,
+    assessor_signed_at      DATETIME NULL,
+
+    site_rep_date           DATE NULL,
+    site_rep_name           VARCHAR(150) NULL,
+    site_rep_designation    VARCHAR(150) NULL,
+    site_rep_contact        VARCHAR(50)  NULL,
+    site_rep_signature      VARCHAR(255) NULL,
+    site_rep_signed_at      DATETIME NULL,
+
+    updated_by              INT NULL,
+    created_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_preassess_site       FOREIGN KEY (rollout_site_id) REFERENCES broadband_rollout_sites(id) ON DELETE CASCADE,
+    CONSTRAINT fk_preassess_updated_by FOREIGN KEY (updated_by)      REFERENCES users(id)
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Site settings — a single row (id = 1) holding sitewide branding: the
 -- name/tagline shown in the header and page titles, an optional logo
 -- (uploaded file, stored in assets/branding/), and the footer text.

@@ -8,6 +8,8 @@ storage/poe_uploads/*
 !storage/poe_uploads/.htaccess
 storage/indigent_uploads/*
 !storage/indigent_uploads/.htaccess
+storage/acceptance_signatures/*
+!storage/acceptance_signatures/.htaccess
 
 # OS/editor cruft
 .DS_Store
