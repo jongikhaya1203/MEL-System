@@ -3,6 +3,8 @@
 
 # Per-install encryption key for stored credentials — never commit
 config/app_key.php
+# Per-server database/URL settings — each server keeps its own; never commit
+config/config.local.php
 
 # Uploaded content (POE documents, indigent signatures/photos) — runtime
 # data, not source. The deny-all .htaccess in each folder is kept (it's a
@@ -15,6 +17,9 @@ storage/acceptance_signatures/*
 !storage/acceptance_signatures/.htaccess
 storage/dt_documents/*
 !storage/dt_documents/.htaccess
+
+# Database/file exports — personal data and the encryption key; never commit
+export/
 
 # OS/editor cruft
 .DS_Store

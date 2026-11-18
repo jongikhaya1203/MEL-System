@@ -1,14 +1,21 @@
 <?php
 // USAASA MEL System - application configuration
 
-define('DB_HOST', 'localhost');
-define('DB_PORT', '3311'); // this XAMPP install's MySQL runs on a custom port — check mysql/bin/my.ini's [mysqld] "port" if this ever changes
-define('DB_NAME', 'usaasa_mel');
-define('DB_USER', 'root');
-define('DB_PASS', '');
+// Per-server overrides (database, URL path) live in config/config.local.php,
+// which is git-ignored so a deployment pull never overwrites them. Copy
+// config/config.local.example.php to create it. Anything it defines wins.
+if (is_file(__DIR__ . '/config.local.php')) {
+    require __DIR__ . '/config.local.php';
+}
+
+defined('DB_HOST') || define('DB_HOST', 'localhost');
+defined('DB_PORT') || define('DB_PORT', '3311'); // this XAMPP install's MySQL runs on a custom port — check mysql/bin/my.ini's [mysqld] "port" if this ever changes
+defined('DB_NAME') || define('DB_NAME', 'usaasa_mel');
+defined('DB_USER') || define('DB_USER', 'root');
+defined('DB_PASS') || define('DB_PASS', '');
 
 define('APP_NAME', 'USAASA MEL System');
-define('APP_BASE_URL', '/mel_system');
+defined('APP_BASE_URL') || define('APP_BASE_URL', '/mel_system');
 
 // Proof-of-evidence (POE) file uploads for the site completion & payment
 // approval module. Stored outside any directly browsable path — see
