@@ -75,6 +75,13 @@ function module_access_definitions(): array
             'Bulk import' => ['roles' => ['admin', 'manager']],
             'Permanently delete' => ['roles' => ['super_admin']],
         ]],
+        'Digital Transformation (ERP, MEL, E-Procurement, Service Desk, Network Tool)' => ['key' => 'digital', 'href' => '/digital/index.php', 'match' => ['dir' => 'digital'], 'levels' => [
+            'View registers, documents and sign-off history' => ['roles' => ['all']],
+            'Add deliverables to a register' => ['roles' => ['admin', 'manager']],
+            'Attach deliverable documents (POE) for approval' => ['roles' => ['admin', 'manager'], 'note' => 'plus any user assigned as a governance signatory'],
+            'Endorse / reject a deliverable' => ['roles' => ['all'], 'note' => 'only users assigned as a signatory of the governance body at the current step of its route'],
+            'Configure governance bodies, signatories and approval workflows' => ['roles' => ['super_admin']],
+        ]],
         'AI Reports' => ['key' => 'ai_reports', 'href' => '/ai_reports/list.php', 'match' => ['dir' => 'ai_reports'], 'levels' => [
             'View / generate' => ['roles' => ['admin', 'manager']],
         ]],
@@ -88,8 +95,11 @@ function module_access_definitions(): array
         'Access Review' => ['key' => 'access_review', 'href' => '/users/access_review.php', 'match' => ['exact' => ['/users/access_review.php']], 'levels' => [
             'View / confirm reviewed' => ['roles' => ['super_admin']],
         ]],
-        'Settings & branding (incl. SMTP)' => ['key' => 'settings', 'href' => '/settings/edit.php', 'match' => ['dir' => 'settings'], 'levels' => [
+        'Settings & branding, Email & Notifications (SMTP, routing)' => ['key' => 'settings', 'href' => '/settings/edit.php', 'match' => ['dir' => 'settings'], 'levels' => [
             'Manage' => ['roles' => ['super_admin']],
+        ]],
+        'Directory Access (Active Directory)' => ['key' => 'directory', 'href' => '/users/directory.php', 'match' => ['exact' => ['/users/directory.php']], 'levels' => [
+            'Configure AD, map groups to roles, grant / revoke directory users, sync' => ['roles' => ['super_admin']],
         ]],
         'CMS Pages' => ['key' => 'cms', 'href' => '/cms/directory.php', 'match' => ['dir' => 'cms'], 'levels' => [
             'View published pages' => ['roles' => ['all']],

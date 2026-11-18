@@ -27,9 +27,11 @@ $all = $stmt->fetchAll();
 
 $points = [];
 $noGps = 0;
+$noGpsSites = [];
 foreach ($all as $r) {
     if ($r['latitude'] === null || $r['longitude'] === null || !is_numeric($r['latitude']) || !is_numeric($r['longitude'])) {
         $noGps++;
+        $noGpsSites[] = $r;
         continue;
     }
     $points[] = [
@@ -100,11 +102,44 @@ include __DIR__ . '/../includes/header.php';
     <?php endif; ?>
 </div>
 
+<?php if ($noGpsSites): ?>
+<?php
+    // Changed sites first, so a status that was just set but isn't on the map is easy to find.
+    usort($noGpsSites, fn($a, $b) => strcmp((string)$b['connectivity_changed_at'], (string)$a['connectivity_changed_at']));
+    $canEdit = in_array(current_user()['role'], ['admin', 'manager', 'planner'], true);
+?>
+<div class="card">
+    <details>
+        <summary style="cursor:pointer; font-weight:600;">&#9888; <?= $noGps ?> site<?= $noGps === 1 ? '' : 's' ?> not on the map &mdash; no GPS coordinates</summary>
+        <p class="hint">Their deployment status is saved, but there is nowhere to plot them. Add latitude and longitude on the site's Edit form (or re-import with GPS) and they will appear in their colour.</p>
+        <div class="table-wrap">
+        <table>
+            <thead><tr><th>Reference</th><th>Site</th><th>Deployment</th><th>Province / Local Mun</th><th>Status changed</th><th></th></tr></thead>
+            <tbody>
+            <?php foreach ($noGpsSites as $r): $c = $statuses[$r['connectivity_status']] ?? $statuses['New']; ?>
+                <tr>
+                    <td><?= e($r['reference_code']) ?></td>
+                    <td><?= e($r['site_name']) ?></td>
+                    <td style="white-space:nowrap;"><span class="dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:<?= $c['color'] ?>"></span> <?= e($r['connectivity_status']) ?></td>
+                    <td><?= e($r['province'] ?? '—') ?><?= $r['local_municipality'] ? ' / ' . e($r['local_municipality']) : '' ?></td>
+                    <td><?= $r['connectivity_changed_at'] ? e(format_datetime($r['connectivity_changed_at'])) : '—' ?></td>
+                    <td><?php if ($canEdit): ?><a href="<?= APP_BASE_URL ?>/broadband/rollout_form.php?id=<?= (int)$r['id'] ?>">Add GPS</a><?php endif; ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        </div>
+    </details>
+</div>
+<?php endif; ?>
+
 <?= $canChange ? '<form id="tokenForm" hidden>' . csrf_field() . '</form>' : '' ?>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
+// A copy restored from the back/forward cache would show markers from before a status change.
+window.addEventListener('pageshow', function (e) { if (e.persisted) { location.reload(); } });
 (function () {
     var SITES = <?= json_encode($points, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
     var STATUSES = <?= json_encode($statuses, JSON_UNESCAPED_UNICODE) ?>;

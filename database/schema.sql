@@ -870,6 +870,346 @@ CREATE TABLE IF NOT EXISTS user_module_denials (
 ) ENGINE=InnoDB;
 
 -- ---------------------------------------------------------------------------
+-- Digital Transformation programme (sidebar: Programmes > Digital
+-- Transformation). Workstreams (ERP Beam Implementation, USAASA MEL System,
+-- E-Procurement, Service Desk, Network Tool) each hold a register of
+-- deliverables. A deliverable's evidence document (POE) is attached as
+-- append-only versions, then routed through an ordered sign-off workflow of
+-- governance bodies (CFO, CIO, Internal Audit, ...). Only users assigned as
+-- signatories of the body at the current step can endorse/reject it; a
+-- super admin maintains the bodies, their signatories and every route.
+-- See includes/digital.php for the routing/status logic.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS dt_projects (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    slug        VARCHAR(30)  NOT NULL UNIQUE,
+    name        VARCHAR(150) NOT NULL,
+    description TEXT NULL,
+    sort_order  INT NOT NULL DEFAULT 0
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS dt_governance_bodies (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    code           VARCHAR(20)  NOT NULL UNIQUE,
+    name           VARCHAR(150) NOT NULL,
+    short_name     VARCHAR(40)  NOT NULL,
+    responsibility VARCHAR(255) NOT NULL,
+    sort_order     INT NOT NULL DEFAULT 0,
+    is_active      TINYINT(1) NOT NULL DEFAULT 1,
+    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- Users who sign on behalf of a governance body (e.g. the actual CFO).
+CREATE TABLE IF NOT EXISTS dt_governance_members (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    body_id     INT NOT NULL,
+    user_id     INT NOT NULL,
+    designation VARCHAR(150) NULL,
+    assigned_by INT NOT NULL,
+    assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dtm_body FOREIGN KEY (body_id) REFERENCES dt_governance_bodies(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dtm_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dtm_assigned_by FOREIGN KEY (assigned_by) REFERENCES users(id),
+    CONSTRAINT uq_dtm_body_user UNIQUE (body_id, user_id)
+) ENGINE=InnoDB;
+
+-- status / pending_body_id / signed_off_at are derived and kept current by
+-- dt_refresh_status() after every upload, sign-off and route change.
+CREATE TABLE IF NOT EXISTS dt_deliverables (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    project_id          INT NOT NULL,
+    code                VARCHAR(30)  NOT NULL UNIQUE,
+    section             VARCHAR(30)  NOT NULL DEFAULT 'general',
+    title               VARCHAR(255) NOT NULL,
+    description         TEXT NULL,
+    owner_body_id       INT NULL,
+    sort_order          INT NOT NULL DEFAULT 0,
+    status              ENUM('Not Started','Awaiting Sign-off','Rejected','Signed Off') NOT NULL DEFAULT 'Not Started',
+    current_document_id INT NULL,
+    pending_body_id     INT NULL,
+    signed_off_at       DATETIME NULL,
+    workflow_customised TINYINT(1) NOT NULL DEFAULT 0,
+    created_by          INT NULL,
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dtd_project FOREIGN KEY (project_id) REFERENCES dt_projects(id),
+    CONSTRAINT fk_dtd_owner   FOREIGN KEY (owner_body_id) REFERENCES dt_governance_bodies(id) ON DELETE SET NULL,
+    CONSTRAINT fk_dtd_pending FOREIGN KEY (pending_body_id) REFERENCES dt_governance_bodies(id) ON DELETE SET NULL,
+    CONSTRAINT fk_dtd_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- Ordered sign-off route for one deliverable (step 1 signs first).
+CREATE TABLE IF NOT EXISTS dt_workflow_steps (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    deliverable_id INT NOT NULL,
+    step_order     INT NOT NULL,
+    body_id        INT NOT NULL,
+
+    CONSTRAINT fk_dtw_deliverable FOREIGN KEY (deliverable_id) REFERENCES dt_deliverables(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dtw_body FOREIGN KEY (body_id) REFERENCES dt_governance_bodies(id) ON DELETE CASCADE,
+    CONSTRAINT uq_dtw_step UNIQUE (deliverable_id, step_order),
+    CONSTRAINT uq_dtw_body UNIQUE (deliverable_id, body_id)
+) ENGINE=InnoDB;
+
+-- Append-only document versions; a new version restarts the sign-off route.
+CREATE TABLE IF NOT EXISTS dt_documents (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    deliverable_id  INT NOT NULL,
+    version_no      INT NOT NULL,
+    file_name       VARCHAR(255) NOT NULL,
+    stored_filename VARCHAR(255) NOT NULL,
+    file_size       INT NOT NULL,
+    mime_type       VARCHAR(150) NOT NULL,
+    sha256          CHAR(64) NOT NULL,
+    notes           VARCHAR(500) NULL,
+    uploaded_by     INT NOT NULL,
+    uploaded_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dtdoc_deliverable FOREIGN KEY (deliverable_id) REFERENCES dt_deliverables(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dtdoc_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users(id),
+    CONSTRAINT uq_dtdoc_version UNIQUE (deliverable_id, version_no)
+) ENGINE=InnoDB;
+
+-- One decision per governance body per document version. body_name and
+-- step_order are snapshots, so the audit trail survives later route edits.
+CREATE TABLE IF NOT EXISTS dt_signoffs (
+    id                 INT AUTO_INCREMENT PRIMARY KEY,
+    deliverable_id     INT NOT NULL,
+    document_id        INT NOT NULL,
+    body_id            INT NULL,
+    body_name          VARCHAR(150) NOT NULL,
+    step_order         INT NOT NULL,
+    decision           ENUM('Endorsed','Rejected') NOT NULL,
+    comments           TEXT NULL,
+    signed_by          INT NOT NULL,
+    signer_name        VARCHAR(150) NOT NULL,
+    signer_designation VARCHAR(150) NULL,
+    signature_file     VARCHAR(255) NULL,
+    ip_address         VARCHAR(45) NULL,
+    signed_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_dts_deliverable FOREIGN KEY (deliverable_id) REFERENCES dt_deliverables(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dts_document FOREIGN KEY (document_id) REFERENCES dt_documents(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dts_body FOREIGN KEY (body_id) REFERENCES dt_governance_bodies(id) ON DELETE SET NULL,
+    CONSTRAINT fk_dts_signed_by FOREIGN KEY (signed_by) REFERENCES users(id),
+    CONSTRAINT uq_dts_doc_body UNIQUE (document_id, body_id)
+) ENGINE=InnoDB;
+
+ALTER TABLE dt_deliverables ADD CONSTRAINT fk_dtd_current_doc FOREIGN KEY IF NOT EXISTS (current_document_id) REFERENCES dt_documents(id) ON DELETE SET NULL;
+
+-- Seed: workstreams
+INSERT INTO dt_projects (slug, name, description, sort_order) VALUES
+('erp', 'ERP Beam Implementation', 'Replacement of the legacy ERP with the Beam ERP platform: blueprint deliverables, data migration blueprint and governance sign-off.', 1),
+('mel', 'USAASA MEL System', 'Monitoring, Evaluation & Learning system — results framework, registers, programme data capture and reporting.', 2),
+('eproc', 'E-Procurement', 'Electronic procurement platform — sourcing, supplier management, RFQ/tender and purchase-to-pay automation.', 3),
+('servicedesk', 'Service Desk', 'IT service management — incident, request, problem and change management with SLA tracking.', 4),
+('network', 'Network Tool', 'Network monitoring and management tooling — availability, capacity and configuration of the USAASA network.', 5)
+ON DUPLICATE KEY UPDATE slug = slug;
+
+-- Seed: governance structure (the blueprint must identify who owns and approves each component)
+INSERT INTO dt_governance_bodies (code, name, short_name, responsibility, sort_order) VALUES
+('ESC', 'Executive Steering Committee', 'Steering Committee', 'Strategic oversight and decisions', 1),
+('CIO', 'CIO / IT Executive', 'CIO', 'Technology architecture and delivery', 2),
+('CFO', 'CFO', 'CFO', 'Financial processes and controls', 3),
+('HR',  'HR Executive', 'HR Executive', 'Human capital requirements', 4),
+('SCM', 'Supply Chain Executive', 'Supply Chain', 'Procurement and supply chain', 5),
+('BPO', 'Business Process Owners', 'Process Owners', 'Functional requirements and acceptance', 6),
+('IMP', 'ERP Implementation Partner', 'Impl. Partner', 'Configuration and technical delivery', 7),
+('IA',  'Internal Audit', 'Internal Audit', 'Controls, compliance and assurance', 8)
+ON DUPLICATE KEY UPDATE code = code;
+
+-- Seed: ERP blueprint deliverables checklist + data migration blueprint
+INSERT INTO dt_deliverables (project_id, code, section, title, description, sort_order)
+SELECT p.id, s.code, s.section, s.title, s.description, s.sort_order
+FROM (
+    SELECT 'ERP-BP-01' AS code, 'blueprint' AS section, 'Approved ERP Business Requirements Specification (BRS)' AS title, NULL AS description, 1 AS sort_order
+    UNION ALL SELECT 'ERP-BP-02', 'blueprint', 'AS-IS business process documentation', NULL, 2
+    UNION ALL SELECT 'ERP-BP-03', 'blueprint', 'TO-BE business process documentation', NULL, 3
+    UNION ALL SELECT 'ERP-BP-04', 'blueprint', 'Functional Requirements Specification (FRS)', NULL, 4
+    UNION ALL SELECT 'ERP-BP-05', 'blueprint', 'ERP gap analysis and fit-gap assessment', NULL, 5
+    UNION ALL SELECT 'ERP-BP-06', 'blueprint', 'Enterprise Solution Architecture Document', NULL, 6
+    UNION ALL SELECT 'ERP-BP-07', 'blueprint', 'ERP Technical Architecture Document', NULL, 7
+    UNION ALL SELECT 'ERP-BP-08', 'blueprint', 'Data Migration and Data Governance Strategy', NULL, 8
+    UNION ALL SELECT 'ERP-BP-09', 'blueprint', 'Systems Integration Architecture and Interface Catalogue', NULL, 9
+    UNION ALL SELECT 'ERP-BP-10', 'blueprint', 'Security and Access Control Matrix', NULL, 10
+    UNION ALL SELECT 'ERP-BP-11', 'blueprint', 'Reporting and Business Intelligence Requirements', NULL, 11
+    UNION ALL SELECT 'ERP-BP-12', 'blueprint', 'ERP Implementation Project Plan and Gantt Chart', NULL, 12
+    UNION ALL SELECT 'ERP-BP-13', 'blueprint', 'ERP Testing and Quality Assurance Strategy', NULL, 13
+    UNION ALL SELECT 'ERP-BP-14', 'blueprint', 'Change Management and Training Plan', NULL, 14
+    UNION ALL SELECT 'ERP-BP-15', 'blueprint', 'Risk Register and Business Continuity Plan', NULL, 15
+    UNION ALL SELECT 'ERP-BP-16', 'blueprint', 'ERP Cost Model, TCO and ROI Business Case', NULL, 16
+    UNION ALL SELECT 'ERP-BP-17', 'blueprint', 'ERP Vendor Evaluation and Selection Report', NULL, 17
+    UNION ALL SELECT 'ERP-BP-18', 'blueprint', 'Implementation Acceptance Criteria and Sign-off Matrix', NULL, 18
+    UNION ALL SELECT 'ERP-DM-01', 'data_migration', 'Existing data sources and databases', 'Inventory of every legacy system, database and file store holding data in scope for migration.', 1
+    UNION ALL SELECT 'ERP-DM-02', 'data_migration', 'Data ownership and accountability', 'Named data owners and stewards accountable for each data domain.', 2
+    UNION ALL SELECT 'ERP-DM-03', 'data_migration', 'Master data management', 'Master data definitions, standards and the governance process for maintaining them.', 3
+    UNION ALL SELECT 'ERP-DM-04', 'data_migration', 'Data cleansing and deduplication', 'Cleansing rules, deduplication approach and data-quality results before load.', 4
+    UNION ALL SELECT 'ERP-DM-05', 'data_migration', 'Data mapping between old and new ERP', 'Field-level source-to-target mapping and transformation rules.', 5
+    UNION ALL SELECT 'ERP-DM-06', 'data_migration', 'Historical transaction migration', 'Scope, period and method for migrating historical transactions.', 6
+    UNION ALL SELECT 'ERP-DM-07', 'data_migration', 'Customer, supplier and employee records', 'Migration approach and validation for customer, supplier and employee master records.', 7
+    UNION ALL SELECT 'ERP-DM-08', 'data_migration', 'Financial opening balances', 'Trial balance and sub-ledger opening balances to be loaded at cut-over.', 8
+    UNION ALL SELECT 'ERP-DM-09', 'data_migration', 'Asset registers and inventory balances', 'Fixed asset register and inventory balances to be migrated and reconciled.', 9
+    UNION ALL SELECT 'ERP-DM-10', 'data_migration', 'Data validation and reconciliation', 'Validation checks and reconciliation of migrated data back to source.', 10
+    UNION ALL SELECT 'ERP-DM-11', 'data_migration', 'Migration testing and sign-off', 'Mock migration cycles, test results and formal migration sign-off.', 11
+    UNION ALL SELECT 'ERP-DM-12', 'data_migration', 'Data retention and archival', 'Retention periods and archival of legacy data not migrated.', 12
+) s
+JOIN dt_projects p ON p.slug = 'erp'
+ON DUPLICATE KEY UPDATE code = dt_deliverables.code;
+
+-- Seed: accountable owner of each component (only where none is set yet)
+UPDATE dt_deliverables d
+JOIN (
+    SELECT 'ERP-BP-01' AS code, 'BPO' AS body UNION ALL SELECT 'ERP-BP-02', 'BPO' UNION ALL SELECT 'ERP-BP-03', 'BPO'
+    UNION ALL SELECT 'ERP-BP-04', 'BPO' UNION ALL SELECT 'ERP-BP-05', 'IMP' UNION ALL SELECT 'ERP-BP-06', 'CIO'
+    UNION ALL SELECT 'ERP-BP-07', 'IMP' UNION ALL SELECT 'ERP-BP-08', 'CIO' UNION ALL SELECT 'ERP-BP-09', 'IMP'
+    UNION ALL SELECT 'ERP-BP-10', 'CIO' UNION ALL SELECT 'ERP-BP-11', 'BPO' UNION ALL SELECT 'ERP-BP-12', 'IMP'
+    UNION ALL SELECT 'ERP-BP-13', 'IMP' UNION ALL SELECT 'ERP-BP-14', 'HR'  UNION ALL SELECT 'ERP-BP-15', 'CIO'
+    UNION ALL SELECT 'ERP-BP-16', 'CFO' UNION ALL SELECT 'ERP-BP-17', 'SCM' UNION ALL SELECT 'ERP-BP-18', 'BPO'
+    UNION ALL SELECT 'ERP-DM-01', 'CIO' UNION ALL SELECT 'ERP-DM-02', 'CIO' UNION ALL SELECT 'ERP-DM-03', 'BPO'
+    UNION ALL SELECT 'ERP-DM-04', 'BPO' UNION ALL SELECT 'ERP-DM-05', 'IMP' UNION ALL SELECT 'ERP-DM-06', 'CFO'
+    UNION ALL SELECT 'ERP-DM-07', 'BPO' UNION ALL SELECT 'ERP-DM-08', 'CFO' UNION ALL SELECT 'ERP-DM-09', 'CFO'
+    UNION ALL SELECT 'ERP-DM-10', 'CFO' UNION ALL SELECT 'ERP-DM-11', 'CIO' UNION ALL SELECT 'ERP-DM-12', 'CIO'
+) o ON o.code = d.code
+JOIN dt_governance_bodies b ON b.code = o.body
+SET d.owner_body_id = b.id
+WHERE d.owner_body_id IS NULL AND d.workflow_customised = 0;
+
+-- Seed: default sign-off routes. Only applied to a deliverable that has no
+-- route yet and whose route a super admin has never edited, so re-importing
+-- this file never overwrites a customised workflow.
+INSERT INTO dt_workflow_steps (deliverable_id, step_order, body_id)
+SELECT d.id, r.step_order, b.id
+FROM (
+              SELECT 'ERP-BP-01' AS code, 1 AS step_order, 'BPO' AS body UNION ALL SELECT 'ERP-BP-01', 2, 'CIO' UNION ALL SELECT 'ERP-BP-01', 3, 'ESC'
+    UNION ALL SELECT 'ERP-BP-02', 1, 'BPO' UNION ALL SELECT 'ERP-BP-02', 2, 'CIO'
+    UNION ALL SELECT 'ERP-BP-03', 1, 'IMP' UNION ALL SELECT 'ERP-BP-03', 2, 'BPO' UNION ALL SELECT 'ERP-BP-03', 3, 'CIO'
+    UNION ALL SELECT 'ERP-BP-04', 1, 'IMP' UNION ALL SELECT 'ERP-BP-04', 2, 'BPO' UNION ALL SELECT 'ERP-BP-04', 3, 'CIO'
+    UNION ALL SELECT 'ERP-BP-05', 1, 'IMP' UNION ALL SELECT 'ERP-BP-05', 2, 'BPO' UNION ALL SELECT 'ERP-BP-05', 3, 'CIO'
+    UNION ALL SELECT 'ERP-BP-06', 1, 'IMP' UNION ALL SELECT 'ERP-BP-06', 2, 'CIO' UNION ALL SELECT 'ERP-BP-06', 3, 'ESC'
+    UNION ALL SELECT 'ERP-BP-07', 1, 'IMP' UNION ALL SELECT 'ERP-BP-07', 2, 'CIO'
+    UNION ALL SELECT 'ERP-BP-08', 1, 'IMP' UNION ALL SELECT 'ERP-BP-08', 2, 'CIO' UNION ALL SELECT 'ERP-BP-08', 3, 'CFO' UNION ALL SELECT 'ERP-BP-08', 4, 'IA'
+    UNION ALL SELECT 'ERP-BP-09', 1, 'IMP' UNION ALL SELECT 'ERP-BP-09', 2, 'CIO'
+    UNION ALL SELECT 'ERP-BP-10', 1, 'CIO' UNION ALL SELECT 'ERP-BP-10', 2, 'IA'
+    UNION ALL SELECT 'ERP-BP-11', 1, 'BPO' UNION ALL SELECT 'ERP-BP-11', 2, 'CFO' UNION ALL SELECT 'ERP-BP-11', 3, 'CIO'
+    UNION ALL SELECT 'ERP-BP-12', 1, 'IMP' UNION ALL SELECT 'ERP-BP-12', 2, 'CIO' UNION ALL SELECT 'ERP-BP-12', 3, 'ESC'
+    UNION ALL SELECT 'ERP-BP-13', 1, 'IMP' UNION ALL SELECT 'ERP-BP-13', 2, 'BPO' UNION ALL SELECT 'ERP-BP-13', 3, 'CIO'
+    UNION ALL SELECT 'ERP-BP-14', 1, 'IMP' UNION ALL SELECT 'ERP-BP-14', 2, 'HR'  UNION ALL SELECT 'ERP-BP-14', 3, 'ESC'
+    UNION ALL SELECT 'ERP-BP-15', 1, 'CIO' UNION ALL SELECT 'ERP-BP-15', 2, 'IA'  UNION ALL SELECT 'ERP-BP-15', 3, 'ESC'
+    UNION ALL SELECT 'ERP-BP-16', 1, 'CFO' UNION ALL SELECT 'ERP-BP-16', 2, 'ESC'
+    UNION ALL SELECT 'ERP-BP-17', 1, 'SCM' UNION ALL SELECT 'ERP-BP-17', 2, 'CFO' UNION ALL SELECT 'ERP-BP-17', 3, 'IA'  UNION ALL SELECT 'ERP-BP-17', 4, 'ESC'
+    UNION ALL SELECT 'ERP-BP-18', 1, 'BPO' UNION ALL SELECT 'ERP-BP-18', 2, 'CIO' UNION ALL SELECT 'ERP-BP-18', 3, 'IA'  UNION ALL SELECT 'ERP-BP-18', 4, 'ESC'
+    UNION ALL SELECT 'ERP-DM-01', 1, 'IMP' UNION ALL SELECT 'ERP-DM-01', 2, 'CIO'
+    UNION ALL SELECT 'ERP-DM-02', 1, 'CIO' UNION ALL SELECT 'ERP-DM-02', 2, 'BPO' UNION ALL SELECT 'ERP-DM-02', 3, 'ESC'
+    UNION ALL SELECT 'ERP-DM-03', 1, 'IMP' UNION ALL SELECT 'ERP-DM-03', 2, 'BPO' UNION ALL SELECT 'ERP-DM-03', 3, 'CIO'
+    UNION ALL SELECT 'ERP-DM-04', 1, 'IMP' UNION ALL SELECT 'ERP-DM-04', 2, 'BPO'
+    UNION ALL SELECT 'ERP-DM-05', 1, 'IMP' UNION ALL SELECT 'ERP-DM-05', 2, 'BPO' UNION ALL SELECT 'ERP-DM-05', 3, 'CIO'
+    UNION ALL SELECT 'ERP-DM-06', 1, 'IMP' UNION ALL SELECT 'ERP-DM-06', 2, 'CFO' UNION ALL SELECT 'ERP-DM-06', 3, 'CIO'
+    UNION ALL SELECT 'ERP-DM-07', 1, 'IMP' UNION ALL SELECT 'ERP-DM-07', 2, 'SCM' UNION ALL SELECT 'ERP-DM-07', 3, 'HR'  UNION ALL SELECT 'ERP-DM-07', 4, 'CFO'
+    UNION ALL SELECT 'ERP-DM-08', 1, 'IMP' UNION ALL SELECT 'ERP-DM-08', 2, 'CFO' UNION ALL SELECT 'ERP-DM-08', 3, 'IA'
+    UNION ALL SELECT 'ERP-DM-09', 1, 'IMP' UNION ALL SELECT 'ERP-DM-09', 2, 'SCM' UNION ALL SELECT 'ERP-DM-09', 3, 'CFO' UNION ALL SELECT 'ERP-DM-09', 4, 'IA'
+    UNION ALL SELECT 'ERP-DM-10', 1, 'IMP' UNION ALL SELECT 'ERP-DM-10', 2, 'BPO' UNION ALL SELECT 'ERP-DM-10', 3, 'CFO' UNION ALL SELECT 'ERP-DM-10', 4, 'IA'
+    UNION ALL SELECT 'ERP-DM-11', 1, 'IMP' UNION ALL SELECT 'ERP-DM-11', 2, 'BPO' UNION ALL SELECT 'ERP-DM-11', 3, 'CIO' UNION ALL SELECT 'ERP-DM-11', 4, 'ESC'
+    UNION ALL SELECT 'ERP-DM-12', 1, 'CIO' UNION ALL SELECT 'ERP-DM-12', 2, 'IA'
+) r
+JOIN dt_deliverables d ON d.code = r.code
+JOIN dt_governance_bodies b ON b.code = r.body
+WHERE d.workflow_customised = 0
+  AND NOT EXISTS (SELECT 1 FROM dt_workflow_steps w WHERE w.deliverable_id = d.id);
+
+-- ---------------------------------------------------------------------------
+-- Email routing & Active Directory (super admin: Email & Notifications,
+-- Directory Access). Secrets (SMTP password, AD bind password) are stored
+-- AES-256-GCM encrypted with the key in config/app_key.php — see
+-- includes/secrets.php. A value without the "enc:" prefix is a legacy
+-- plaintext value and is encrypted on the next save.
+-- ---------------------------------------------------------------------------
+ALTER TABLE site_settings MODIFY COLUMN smtp_password VARCHAR(512) NULL;
+ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS smtp_reply_to VARCHAR(255) NULL AFTER smtp_from_name;
+ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS mail_bcc_archive VARCHAR(255) NULL AFTER smtp_reply_to;
+ALTER TABLE site_settings ADD COLUMN IF NOT EXISTS mail_test_mode_to VARCHAR(255) NULL AFTER mail_bcc_archive;
+
+-- One row per notification type; a missing row means "enabled, no CC" (see notification_events()).
+CREATE TABLE IF NOT EXISTS notification_rules (
+    event_key  VARCHAR(50) PRIMARY KEY,
+    enabled    TINYINT(1) NOT NULL DEFAULT 1,
+    cc_emails  VARCHAR(1000) NULL,
+    updated_by INT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_notification_rules_user FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS event_key VARCHAR(50) NULL AFTER site_id;
+
+CREATE TABLE IF NOT EXISTS ad_settings (
+    id                INT PRIMARY KEY,
+    enabled           TINYINT(1) NOT NULL DEFAULT 0,
+    hosts             VARCHAR(500) NULL,
+    port              INT NOT NULL DEFAULT 636,
+    encryption        ENUM('ldaps','starttls','none') NOT NULL DEFAULT 'ldaps',
+    verify_cert       TINYINT(1) NOT NULL DEFAULT 1,
+    base_dn           VARCHAR(500) NULL,
+    bind_dn           VARCHAR(500) NULL,
+    bind_password     VARCHAR(512) NULL,
+    user_filter       VARCHAR(500) NOT NULL DEFAULT '(&(objectCategory=person)(objectClass=user))',
+    upn_suffix        VARCHAR(150) NULL,
+    nested_groups     TINYINT(1) NOT NULL DEFAULT 1,
+    auto_provision    TINYINT(1) NOT NULL DEFAULT 0,
+    sync_deactivate   TINYINT(1) NOT NULL DEFAULT 1,
+    timeout_seconds   INT NOT NULL DEFAULT 5,
+    last_sync_at      DATETIME NULL,
+    last_sync_summary VARCHAR(500) NULL,
+    updated_by        INT NULL,
+    updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_ad_settings_user FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+INSERT INTO ad_settings (id) VALUES (1) ON DUPLICATE KEY UPDATE id = id;
+
+-- AD security group -> MEL role (+ optional Digital Transformation governance
+-- body). The lowest priority number wins when a user is in several groups.
+-- Mappings never grant Super Admin; that stays a manual, local decision.
+CREATE TABLE IF NOT EXISTS ad_group_mappings (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    group_dn    VARCHAR(500) NOT NULL,
+    group_name  VARCHAR(255) NULL,
+    role        ENUM('admin','manager','viewer','field_worker','back_office','approver','indigent_capturer','planner') NOT NULL,
+    dt_body_id  INT NULL,
+    priority    INT NOT NULL DEFAULT 100,
+    created_by  INT NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_adgm_body FOREIGN KEY (dt_body_id) REFERENCES dt_governance_bodies(id) ON DELETE SET NULL,
+    CONSTRAINT fk_adgm_created_by FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB;
+
+-- auth_source='ad': password checked against Active Directory, never stored
+-- locally. role_source='directory': role follows AD group mappings on every
+-- login/sync; 'manual': role set here and left alone by sync.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_source ENUM('local','ad') NOT NULL DEFAULT 'local' AFTER is_super_admin;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role_source ENUM('manual','directory') NOT NULL DEFAULT 'manual' AFTER auth_source;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ad_guid VARCHAR(36) NULL AFTER role_source;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ad_dn VARCHAR(500) NULL AFTER ad_guid;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ad_synced_at DATETIME NULL AFTER ad_dn;
+ALTER TABLE users ADD UNIQUE INDEX IF NOT EXISTS uq_users_ad_guid (ad_guid);
+
+CREATE TABLE IF NOT EXISTS access_audit_log (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    user_id    INT NULL,
+    actor_id   INT NULL,
+    action     VARCHAR(50) NOT NULL,
+    details    VARCHAR(1000) NULL,
+    ip_address VARCHAR(45) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_access_audit_created (created_at),
+    CONSTRAINT fk_access_audit_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_access_audit_actor FOREIGN KEY (actor_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------------
 -- Seed data
 -- ---------------------------------------------------------------------------
 INSERT INTO users (username, password_hash, full_name, email, role)

@@ -3,6 +3,10 @@
 require_once __DIR__ . '/sa_municipalities.php';
 require_once __DIR__ . '/ai_report.php';
 require_once __DIR__ . '/access_matrix.php';
+require_once __DIR__ . '/digital.php';
+require_once __DIR__ . '/secrets.php';
+require_once __DIR__ . '/mailer.php';
+require_once __DIR__ . '/directory.php';
 
 function redirect(string $path): void
 {
@@ -508,6 +512,12 @@ function get_site_settings(PDO $pdo): array
         $row = ['site_name' => APP_NAME, 'tagline' => null, 'footer_text' => null, 'logo_filename' => null];
     }
     $row['logo_url'] = $row['logo_filename'] ? LOGO_PUBLIC_PATH . $row['logo_filename'] : null;
+    // Stored encrypted (includes/secrets.php); callers always see the usable value.
+    try {
+        $row['smtp_password'] = decrypt_secret($row['smtp_password'] ?? null);
+    } catch (Throwable $e) {
+        $row['smtp_password'] = '';
+    }
     $settings = $row;
     return $settings;
 }
@@ -614,155 +624,13 @@ function bar_path_rounded_top(float $x, float $y, float $width, float $height, f
 }
 
 /**
- * A minimal, dependency-free SMTP client: connects, EHLO, optional
- * STARTTLS, optional AUTH LOGIN, sends one plain-text message, QUITs.
- * Covers the common case (STARTTLS on 587, or implicit TLS on 465) without
- * pulling in a mail library — consistent with this app having zero
- * external dependencies anywhere else.
- *
+ * Sends one plain-text email to a single recipient. Kept for existing
+ * callers; the SMTP client itself is smtp_send_message() in mailer.php.
  * Returns ['success' => bool, 'error' => ?string].
  */
 function send_smtp_email(array $cfg, string $toEmail, string $toName, string $subject, string $body): array
 {
-    $host = $cfg['smtp_host'] ?? '';
-    $port = (int)($cfg['smtp_port'] ?? 587);
-    $encryption = $cfg['smtp_encryption'] ?? 'tls';
-    $username = $cfg['smtp_username'] ?? '';
-    $password = $cfg['smtp_password'] ?? '';
-    $fromEmail = $cfg['smtp_from_email'] ?? '';
-    $fromName = $cfg['smtp_from_name'] ?: 'USAASA MEL System';
-
-    if ($host === '' || $fromEmail === '') {
-        return ['success' => false, 'error' => 'SMTP host or from-address is not configured.'];
-    }
-
-    $transport = $encryption === 'ssl' ? 'ssl://' : '';
-    $errno = 0;
-    $errstr = '';
-    $socket = @stream_socket_client("$transport$host:$port", $errno, $errstr, 15, STREAM_CLIENT_CONNECT);
-    if (!$socket) {
-        return ['success' => false, 'error' => "Could not connect to SMTP server: $errstr ($errno)"];
-    }
-    stream_set_timeout($socket, 15);
-
-    $read = function () use ($socket) {
-        $data = '';
-        while (!feof($socket)) {
-            $line = fgets($socket, 515);
-            if ($line === false) {
-                break;
-            }
-            $data .= $line;
-            if (isset($line[3]) && $line[3] === ' ') {
-                break;
-            }
-        }
-        return $data;
-    };
-    $write = function (string $cmd) use ($socket) {
-        fwrite($socket, $cmd . "\r\n");
-    };
-    $expect = function (string $response, string ...$codes) {
-        foreach ($codes as $code) {
-            if (substr($response, 0, 3) === $code) {
-                return true;
-            }
-        }
-        return false;
-    };
-    $fail = function (string $message) use ($socket) {
-        fclose($socket);
-        return ['success' => false, 'error' => $message];
-    };
-
-    $greeting = $read();
-    if (!$expect($greeting, '220')) {
-        return $fail("Unexpected SMTP greeting: $greeting");
-    }
-
-    $write('EHLO localhost');
-    $ehlo = $read();
-    if (!$expect($ehlo, '250')) {
-        return $fail("EHLO failed: $ehlo");
-    }
-
-    if ($encryption === 'tls') {
-        $write('STARTTLS');
-        $tls = $read();
-        if (!$expect($tls, '220')) {
-            return $fail("STARTTLS failed: $tls");
-        }
-        if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
-            return $fail('TLS negotiation failed.');
-        }
-        $write('EHLO localhost');
-        $ehlo2 = $read();
-        if (!$expect($ehlo2, '250')) {
-            return $fail("EHLO after STARTTLS failed: $ehlo2");
-        }
-    }
-
-    if ($username !== '') {
-        $write('AUTH LOGIN');
-        $authResp = $read();
-        if (!$expect($authResp, '334')) {
-            return $fail("AUTH LOGIN not accepted: $authResp");
-        }
-        $write(base64_encode($username));
-        $userResp = $read();
-        if (!$expect($userResp, '334')) {
-            return $fail("SMTP username rejected: $userResp");
-        }
-        $write(base64_encode($password));
-        $passResp = $read();
-        if (!$expect($passResp, '235')) {
-            return $fail("SMTP authentication failed: $passResp");
-        }
-    }
-
-    $write("MAIL FROM:<$fromEmail>");
-    $mailResp = $read();
-    if (!$expect($mailResp, '250')) {
-        return $fail("MAIL FROM rejected: $mailResp");
-    }
-
-    $write("RCPT TO:<$toEmail>");
-    $rcptResp = $read();
-    if (!$expect($rcptResp, '250', '251')) {
-        return $fail("RCPT TO rejected: $rcptResp");
-    }
-
-    $write('DATA');
-    $dataResp = $read();
-    if (!$expect($dataResp, '354')) {
-        return $fail("DATA command rejected: $dataResp");
-    }
-
-    $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
-    $messageId = '<' . bin2hex(random_bytes(16)) . '@' . preg_replace('/[^a-zA-Z0-9.-]/', '', $host) . '>';
-    $headers = "From: $fromName <$fromEmail>\r\n"
-        . "To: $toName <$toEmail>\r\n"
-        . "Subject: $encodedSubject\r\n"
-        . 'Date: ' . date('r') . "\r\n"
-        . "Message-ID: $messageId\r\n"
-        . "MIME-Version: 1.0\r\n"
-        . "Content-Type: text/plain; charset=UTF-8\r\n"
-        . "Content-Transfer-Encoding: 8bit\r\n";
-
-    // RFC 5321 dot-stuffing: a line that starts with "." must be escaped
-    // as ".." or the server reads it as the end-of-DATA marker.
-    $escapedBody = preg_replace('/^\./m', '..', $body);
-
-    $write($headers . "\r\n" . $escapedBody . "\r\n.");
-    $sendResp = $read();
-    if (!$expect($sendResp, '250')) {
-        return $fail("Message not accepted: $sendResp");
-    }
-
-    $write('QUIT');
-    fclose($socket);
-
-    return ['success' => true, 'error' => null];
+    return smtp_send_message($cfg, [['email' => $toEmail, 'name' => $toName]], [], [], $cfg['smtp_reply_to'] ?? null, $subject, $body);
 }
 
 /**
@@ -784,11 +652,6 @@ function notify_installer_of_status_change(PDO $pdo, int $siteId, string $newSta
 
 function notify_installer_of_status_change_impl(PDO $pdo, int $siteId, string $newStatus, ?string $reason): void
 {
-    $settings = get_site_settings($pdo);
-    if (empty($settings['smtp_enabled'])) {
-        return;
-    }
-
     $stmt = $pdo->prepare(
         "SELECT s.site_code, s.site_name, u.full_name AS installer_name, u.email AS installer_email
          FROM sites s
@@ -801,29 +664,17 @@ function notify_installer_of_status_change_impl(PDO $pdo, int $siteId, string $n
         return;
     }
 
-    $subject = "[{$site['site_code']}] Status update: $newStatus";
-
-    if (!$site['installer_email']) {
-        $pdo->prepare(
-            'INSERT INTO notification_log (site_id, recipient_email, subject, status, error_message) VALUES (?, ?, ?, ?, ?)'
-        )->execute([$siteId, '(no email on file)', $subject, 'failed', 'Installer ' . $site['installer_name'] . ' has no email address on their account.']);
-        return;
-    }
-
     $body = "Hello {$site['installer_name']},\n\n"
         . "The status of your submitted site completion has changed.\n\n"
         . "Reference: {$site['site_code']}\n"
         . "Site: {$site['site_name']}\n"
         . "New status: $newStatus\n"
         . ($reason ? "Reason: $reason\n" : '')
-        . "\nLog in to the USAASA MEL System to view the full record.\n\n"
-        . "This is an automated notification — please do not reply to this email.\n";
+        . "\nLog in to the USAASA MEL System to view the full record.\n";
 
-    $result = send_smtp_email($settings, $site['installer_email'], $site['installer_name'], $subject, $body);
-
-    $pdo->prepare(
-        'INSERT INTO notification_log (site_id, recipient_email, subject, status, error_message) VALUES (?, ?, ?, ?, ?)'
-    )->execute([$siteId, $site['installer_email'], $subject, $result['success'] ? 'sent' : 'failed', $result['error']]);
+    // Routing (on/off, CC, archive, test mode) and logging happen in send_notification().
+    send_notification($pdo, 'site_status', [['email' => $site['installer_email'], 'name' => $site['installer_name']]],
+        "[{$site['site_code']}] Status update: $newStatus", $body, $siteId);
 }
 
 /**

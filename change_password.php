@@ -8,6 +8,12 @@ require_login();
 $user = current_user();
 $forced = !empty($user['must_change_password']);
 
+// Directory accounts have no local password — it's managed in Active Directory.
+if (($user['auth_source'] ?? 'local') === 'ad') {
+    flash('info', 'Your account signs in with your network (Active Directory) password. Change it the way you normally change your Windows password, or ask IT.');
+    redirect('/index.php');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_verify();
     $currentPassword = $_POST['current_password'] ?? '';

@@ -21,16 +21,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt = $pdo->prepare('SELECT * FROM users WHERE username = ? AND is_active = 1');
     $stmt->execute([$username]);
     $user = $stmt->fetch();
-
-    if ($user && $user['locked_until'] && strtotime($user['locked_until']) > time()) {
-        $minutesLeft = (int)ceil((strtotime($user['locked_until']) - time()) / 60);
-        $error = "This account is temporarily locked after repeated failed attempts. Try again in $minutesLeft minute" . ($minutesLeft === 1 ? '' : 's') . ', or ask an admin to unlock it.';
-    } elseif ($user && password_verify($password, $user['password_hash'])) {
-        $pdo->prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = ?')->execute([$user['id']]);
-        login_user($user);
+    $adOn = ad_is_enabled($pdo);
+    $isLocked = fn($u) => $u && $u['locked_until'] && strtotime($u['locked_until']) > time();
+    $lockedMessage = function ($u) {
+        $minutesLeft = (int)ceil((strtotime($u['locked_until']) - time()) / 60);
+        return "This account is temporarily locked after repeated failed attempts. Try again in $minutesLeft minute" . ($minutesLeft === 1 ? '' : 's') . ', or ask an admin to unlock it.';
+    };
+    $signIn = function (array $u) use ($pdo) {
+        $pdo->prepare('UPDATE users SET failed_login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = ?')->execute([$u['id']]);
+        login_user($u);
         redirect('/index.php');
+    };
+
+    // Active Directory sign-in: an AD-linked account, or a directory login
+    // (DOMAIN\user, UPN, email) that doesn't match a local username.
+    $adUser = null;
+    $adError = null;
+    $tryAd = ($user && $user['auth_source'] === 'ad') || (!$user && $adOn && $username !== '');
+    if ($user && $user['auth_source'] === 'ad' && !$adOn) {
+        $tryAd = false;
+        $adError = 'Directory sign-in is currently switched off. Contact the system administrator.';
+    }
+
+    if ($isLocked($user)) {
+        $error = $lockedMessage($user);
+    } elseif ($tryAd && ($adUser = ad_login($pdo, $username, $password, $user ?: null, $adError))) {
+        if ($isLocked($adUser)) {
+            $error = $lockedMessage($adUser);
+        } else {
+            $signIn($adUser);
+        }
+    } elseif ($user && $user['auth_source'] !== 'ad' && password_verify($password, $user['password_hash'])) {
+        $signIn($user);
+    } elseif (!$user && $adError) {
+        $error = $adError;
     } else {
-        if ($user) {
+        // A specific directory message (service down, account disabled, no access) is shown as-is;
+        // only a genuine wrong-password counts towards the lockout.
+        $specificAdError = $adError && $adError !== 'Invalid username or password.';
+        $error = $specificAdError ? $adError : 'Invalid username or password.';
+        if ($user && !$specificAdError) {
             $attempts = (int)$user['failed_login_attempts'] + 1;
             if ($attempts >= MAX_LOGIN_ATTEMPTS) {
                 $lockedUntil = date('Y-m-d H:i:s', strtotime('+' . LOCKOUT_MINUTES . ' minutes'));
@@ -38,10 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = "This account has been locked for " . LOCKOUT_MINUTES . " minutes after $attempts failed attempts.";
             } else {
                 $pdo->prepare('UPDATE users SET failed_login_attempts = ? WHERE id = ?')->execute([$attempts, $user['id']]);
-                $error = 'Invalid username or password.';
             }
-        } else {
-            $error = 'Invalid username or password.';
         }
     }
 }
@@ -61,7 +88,8 @@ include __DIR__ . '/includes/header.php';
             <?= csrf_field() ?>
             <div class="field">
                 <label for="username">Username</label>
-                <input type="text" id="username" name="username" required autofocus>
+                <input type="text" id="username" name="username" required autofocus autocomplete="username">
+                <?php if (ad_is_enabled($pdo)): ?><div class="hint">Use your network (Active Directory) username and password, e.g. jsmith or jsmith@<?= e(ltrim((string)(ad_settings($pdo)['upn_suffix'] ?: 'usaasa.org.za'), '@')) ?>.</div><?php endif; ?>
             </div>
             <div class="field">
                 <label for="password">Password</label>

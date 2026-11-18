@@ -162,15 +162,19 @@ include __DIR__ . '/../includes/header.php';
                 <td><?= e($r['site_name']) ?><?= $r['official_site_id'] ? '<br><span class="hint">ID ' . e($r['official_site_id']) . '</span>' : '' ?></td>
                 <td style="white-space:nowrap;">
                     <?php $cs = connectivity_statuses()[$r['connectivity_status']] ?? connectivity_statuses()['New']; ?>
+                    <?php $hasGps = $r['latitude'] !== null && $r['longitude'] !== null; ?>
                     <span class="conn-dot" style="background:<?= $cs['color'] ?>" data-dot-for="<?= (int)$r['id'] ?>"></span>
                     <?php if ($canChange): ?>
-                        <select class="conn-select" data-id="<?= (int)$r['id'] ?>" aria-label="Deployment status for <?= e($r['site_name']) ?>">
+                        <select class="conn-select" data-id="<?= (int)$r['id'] ?>" data-gps="<?= $hasGps ? 1 : 0 ?>" aria-label="Deployment status for <?= e($r['site_name']) ?>">
                             <?php foreach (connectivity_statuses() as $key => $c): ?>
                                 <option value="<?= $key ?>" <?= $r['connectivity_status'] === $key ? 'selected' : '' ?>><?= $key ?></option>
                             <?php endforeach; ?>
                         </select>
                     <?php else: ?>
                         <?= e($r['connectivity_status']) ?>
+                    <?php endif; ?>
+                    <?php if (!$hasGps): ?>
+                        <br><span class="hint no-gps" title="This site has no GPS coordinates, so it can't be shown on the map. Add them on the Edit form.">&#9888; no GPS &ndash; not on map</span>
                     <?php endif; ?>
                 </td>
                 <td><?= e($r['site_type'] === 'Other' && $r['site_type_other'] ? $r['site_type_other'] : ($r['site_type'] ?? '—')) ?></td>
@@ -214,7 +218,13 @@ include __DIR__ . '/../includes/header.php';
     .conn-select { width: auto; padding: 2px 4px; font-size: 12.5px; }
     .conn-chip.is-on { outline: 2px solid var(--brand); }
     .conn-saving { opacity: .5; }
+    .no-gps { color: #b06000; font-size: 11.5px; margin: 0; white-space: nowrap; }
 </style>
+<script>
+// Statuses are changed in place without a reload; if the browser restores this page from its
+// back/forward cache, reload it so the dropdowns, counts and map link reflect the saved data.
+window.addEventListener('pageshow', function (e) { if (e.persisted) { location.reload(); } });
+</script>
 
 <?php if ($canSelect && $rows): ?>
 <script>
@@ -284,6 +294,7 @@ include __DIR__ . '/../includes/header.php';
                     previous = value;
                     var dot = document.querySelector('[data-dot-for="' + id + '"]');
                     if (dot) { dot.style.background = COLORS[value]; }
+                    if (sel.getAttribute('data-gps') !== '1') { alert(res.message); }
                 })
                 .catch(function (err) {
                     sel.value = previous;

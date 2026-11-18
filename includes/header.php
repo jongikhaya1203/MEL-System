@@ -14,6 +14,22 @@ function nav_is_active(array $item, string $relPath): bool
         }
         return false;
     }
+    // Links that differ only by query string (e.g. /digital/project.php?p=erp). A page with no
+    // query of its own (a deliverable page) can claim one of them via $navActiveHref.
+    if (isset($item['query'])) {
+        if (isset($GLOBALS['navActiveHref'])) {
+            return $GLOBALS['navActiveHref'] === $item['href'];
+        }
+        if (strpos($item['href'], $relPath . '?') !== 0) {
+            return false;
+        }
+        foreach ($item['query'] as $k => $v) {
+            if ((string)($_GET[$k] ?? '') !== $v) {
+                return false;
+            }
+        }
+        return true;
+    }
     if (isset($item['exact'])) {
         return in_array($relPath, $item['exact'], true);
     }
@@ -37,6 +53,7 @@ function nav_icon(string $name): string
         'results'    => '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
         'planning'   => '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
         'broadband'  => '<path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.7 16a5 5 0 0 1 6.6 0"/><circle cx="12" cy="19.3" r="1.1"/>',
+        'digital'    => '<rect x="3" y="4" width="18" height="12" rx="1.8"/><path d="M8 20h8M12 16v4"/><path d="M7.5 10.5l2.5-2.5 2.5 2.5 4-4"/>',
         'bdm'        => '<rect x="3" y="7.5" width="18" height="12" rx="2"/><path d="M8.5 3l3.5 4.5L15.5 3M8 22h8"/>',
         'ai'         => '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/>',
         'pages'      => '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
@@ -45,6 +62,8 @@ function nav_icon(string $name): string
         'edit'       => '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
         'docs'       => '<path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H11v17H5.5A1.5 1.5 0 0 0 4 21.5zM20 4.5A1.5 1.5 0 0 0 18.5 3H13v17h5.5a1.5 1.5 0 0 1 1.5 1.5z"/>',
         'shield'     => '<path d="M12 3l7.5 3v5.5c0 4.5-3.2 8.3-7.5 9.5-4.3-1.2-7.5-5-7.5-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/>',
+        'mail'       => '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/>',
+        'directory'  => '<circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 4.5h5M16 8.5h5M17.5 12.5h3.5"/>',
         'settings'   => '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
     ];
     return '<svg class="nav-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -66,6 +85,16 @@ function nav_badge_counts(PDO $pdo): array
     }
 }
 
+/** Separate from nav_badge_counts() so a missing Digital Transformation table can't hide the other badges. */
+function nav_digital_badge(PDO $pdo, array $user): array
+{
+    try {
+        return ['dt_pending' => dt_pending_count_for_user($pdo, (int)$user['id'])];
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
 $navItems = [
     ['label' => 'Dashboard', 'icon' => 'dashboard', 'href' => '/index.php', 'exact' => ['/index.php']],
     ['label' => 'Projects', 'icon' => 'projects', 'href' => '/projects/list.php', 'exact' => ['/projects/list.php']],
@@ -73,7 +102,7 @@ $navItems = [
     ['label' => 'Risk Register', 'icon' => 'risks', 'href' => '/risks/list.php', 'dir' => 'risks'],
     ['label' => 'Results Framework', 'icon' => 'results', 'href' => '/indicators/framework.php', 'dir' => 'indicators'],
     ['label' => 'Planning &amp; Dispatch', 'icon' => 'planning', 'href' => '/planning/list.php', 'dir' => 'planning'],
-    ['section' => 'Programmes'],
+    ['section' => 'Programmes', 'class' => 'is-programmes'],
     ['label' => 'Broadband', 'icon' => 'broadband', 'key' => 'broadband', 'children' => [
         ['label' => 'Site Completions', 'href' => '/sites/list.php', 'dir' => 'sites', 'badge' => 'sites_submitted', 'badge_title' => 'submitted, awaiting verification',
             'exclude' => ['/sites/acceptance_list.php', '/sites/acceptance_form.php']],
@@ -90,6 +119,20 @@ $navItems = [
         ['label' => 'Indigent Applications', 'href' => '/indigent/list.php', 'dir' => 'indigent',
             'exclude' => ['/indigent/form.php']],
     ]],
+    ['label' => 'Digital Transformation', 'icon' => 'digital', 'key' => 'digital', 'children' => [
+        ['label' => 'Overview', 'href' => '/digital/index.php', 'exact' => ['/digital/index.php']],
+        ['label' => 'ERP Beam Implementation', 'href' => '/digital/project.php?p=erp', 'query' => ['p' => 'erp', 'section' => '']],
+        ['label' => 'Blueprint Checklist', 'nested' => true, 'href' => '/digital/project.php?p=erp&amp;section=blueprint', 'query' => ['p' => 'erp', 'section' => 'blueprint']],
+        ['label' => 'Data Migration Blueprint', 'nested' => true, 'href' => '/digital/project.php?p=erp&amp;section=data_migration', 'query' => ['p' => 'erp', 'section' => 'data_migration']],
+        ['label' => 'Governance &amp; Accountability', 'nested' => true, 'href' => '/digital/governance.php', 'exact' => ['/digital/governance.php']],
+        ['label' => 'USAASA MEL System', 'href' => '/digital/project.php?p=mel', 'query' => ['p' => 'mel']],
+        ['label' => 'E-Procurement', 'href' => '/digital/project.php?p=eproc', 'query' => ['p' => 'eproc']],
+        ['label' => 'Service Desk', 'href' => '/digital/project.php?p=servicedesk', 'query' => ['p' => 'servicedesk']],
+        ['label' => 'Network Tool', 'href' => '/digital/project.php?p=network', 'query' => ['p' => 'network']],
+        ['label' => 'My Sign-offs', 'href' => '/digital/my_signoffs.php', 'exact' => ['/digital/my_signoffs.php'],
+            'badge' => 'dt_pending', 'badge_title' => 'deliverables awaiting your signature'],
+        ['label' => 'Approval Workflows', 'href' => '/digital/workflows.php', 'exact' => ['/digital/workflows.php', '/digital/workflow_edit.php'], 'super' => true],
+    ]],
     ['section' => 'Tools'],
     ['label' => 'AI Reports', 'icon' => 'ai', 'href' => '/ai_reports/list.php', 'dir' => 'ai_reports', 'roles' => ['admin', 'manager']],
     ['label' => 'Pages', 'icon' => 'pages', 'href' => '/cms/directory.php', 'exact' => ['/cms/directory.php', '/cms/view.php']],
@@ -102,6 +145,8 @@ $adminNavItems = [
 ];
 $superAdminNavItems = [
     ['label' => 'Access Review', 'icon' => 'shield', 'href' => '/users/access_review.php', 'exact' => ['/users/access_review.php']],
+    ['label' => 'Directory Access (AD)', 'icon' => 'directory', 'href' => '/users/directory.php', 'exact' => ['/users/directory.php']],
+    ['label' => 'Email &amp; Notifications', 'icon' => 'mail', 'href' => '/settings/email.php', 'exact' => ['/settings/email.php', '/settings/test_email.php']],
     ['label' => 'Settings', 'icon' => 'settings', 'href' => '/settings/edit.php', 'exact' => ['/settings/edit.php']],
 ];
 
@@ -113,7 +158,7 @@ function nav_link(array $item, string $relPath): string
         . ($active ? ' aria-current="page"' : '') . '>' . nav_icon($item['icon'] ?? '')
         . '<span class="nav-label">' . $item['label'] . '</span></a>';
 }
-$navBadges = $user ? nav_badge_counts($pdo) : [];
+$navBadges = $user ? nav_badge_counts($pdo) + nav_digital_badge($pdo, $user) : [];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -136,12 +181,13 @@ $navBadges = $user ? nav_badge_counts($pdo) : [];
         <nav class="sidenav" aria-label="Main">
             <?php foreach ($navItems as $item): ?>
                 <?php if (isset($item['section'])): ?>
-                    <div class="sidenav-divider"><?= e($item['section']) ?></div>
+                    <div class="sidenav-divider<?= isset($item['class']) ? ' ' . e($item['class']) : '' ?>"><?= e($item['section']) ?></div>
                     <?php continue; ?>
                 <?php endif; ?>
                 <?php if (isset($item['roles']) && !in_array($user['role'], $item['roles'], true)) continue; ?>
                 <?php if (isset($item['children'])):
-                    $children = array_filter($item['children'], fn($c) => !isset($c['roles']) || in_array($user['role'], $c['roles'], true));
+                    $children = array_filter($item['children'], fn($c) => (!isset($c['roles']) || in_array($user['role'], $c['roles'], true))
+                        && (empty($c['super']) || is_super_admin()));
                     if (!$children) continue;
                     $groupActive = nav_is_active($item, $relPath);
                     $groupId = 'navgrp-' . $item['key'];
@@ -161,7 +207,7 @@ $navBadges = $user ? nav_badge_counts($pdo) : [];
                                 <?php foreach ($children as $child):
                                     $childActive = nav_is_active($child, $relPath);
                                     $count = $navBadges[$child['badge'] ?? ''] ?? 0; ?>
-                                    <a href="<?= APP_BASE_URL . $child['href'] ?>" class="nav-sub<?= $childActive ? ' active' : '' ?>"<?= $childActive ? ' aria-current="page"' : '' ?>>
+                                    <a href="<?= APP_BASE_URL . $child['href'] ?>" class="nav-sub<?= !empty($child['nested']) ? ' is-nested' : '' ?><?= $childActive ? ' active' : '' ?>"<?= $childActive ? ' aria-current="page"' : '' ?>>
                                         <span class="nav-sub-label"><?= $child['label'] ?></span>
                                         <?php if ($count > 0): ?>
                                             <span class="nav-badge" title="<?= number_format($count) . ' ' . e($child['badge_title'] ?? '') ?>"><?= $count > 999 ? '999+' : $count ?></span>
@@ -213,10 +259,16 @@ $navBadges = $user ? nav_badge_counts($pdo) : [];
         })();
         </script>
         <div class="sidenav-user">
-            <span><?= e($user['full_name']) ?></span>
+            <span class="user-name"><?= e($user['full_name']) ?></span>
             <?= user_role_badge($user) ?>
-            <a href="<?= APP_BASE_URL ?>/change_password.php">Change password</a>
-            <a class="logout" href="<?= APP_BASE_URL ?>/logout.php">Log out</a>
+            <?php if (($user['auth_source'] ?? 'local') !== 'ad'): ?>
+            <a href="<?= APP_BASE_URL ?>/change_password.php">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/></svg>
+                <span>Change password</span></a>
+            <?php endif; ?>
+            <a class="logout" href="<?= APP_BASE_URL ?>/logout.php">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l4-4-4-4M14 12H4"/></svg>
+                <span>Log out</span></a>
         </div>
     </aside>
     <div class="main-col">

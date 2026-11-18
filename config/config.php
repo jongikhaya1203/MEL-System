@@ -39,6 +39,13 @@ define('ACCEPTANCE_STORAGE_DIR', __DIR__ . '/../storage/acceptance_signatures/')
 // The same folder also holds Broadband pre-assessment site photos and signatures.
 define('ACCEPTANCE_PROOF_MAX_BYTES', 8 * 1024 * 1024);
 
+// Digital Transformation programme — deliverable documents (POE) submitted
+// for governance sign-off, plus the drawn signatures captured at each
+// sign-off. Deny-all .htaccess; served only through digital/download.php
+// and digital/signature.php, which check the requester is logged in.
+define('DT_STORAGE_DIR', __DIR__ . '/../storage/dt_documents/');
+define('DT_DOC_MAX_BYTES', 25 * 1024 * 1024);
+
 date_default_timezone_set('Africa/Johannesburg');
 
 if (session_status() === PHP_SESSION_NONE) {

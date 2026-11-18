@@ -83,6 +83,7 @@ function login_user(array $user): void
         'full_name' => $user['full_name'],
         'role' => $user['role'],
         'is_super_admin' => (bool)($user['is_super_admin'] ?? false),
+        'auth_source' => $user['auth_source'] ?? 'local',
         'must_change_password' => (bool)($user['must_change_password'] ?? false),
     ];
 }

@@ -50,6 +50,16 @@ $stmt = $pdo->prepare("UPDATE broadband_rollout_sites
 $stmt->execute(array_merge([$status, (int)current_user()['id']], $ids, [$status]));
 $n = $stmt->rowCount();
 
-$respond(true, $n . ' site' . ($n === 1 ? '' : 's') . " set to $status.", 200, [
-    'status' => $status, 'color' => connectivity_statuses()[$status]['color'], 'changed' => $n,
+// Sites without GPS coordinates can't be plotted, so their colour never shows on the map — say so.
+$gps = $pdo->prepare("SELECT COUNT(*) FROM broadband_rollout_sites WHERE id IN ($in) AND (latitude IS NULL OR longitude IS NULL)");
+$gps->execute($ids);
+$noGps = (int)$gps->fetchColumn();
+
+$message = $n . ' site' . ($n === 1 ? '' : 's') . " set to $status.";
+if ($noGps) {
+    $message .= ' ' . ($noGps === count($ids) && $noGps === 1 ? 'This site has' : "$noGps of the selected sites have")
+        . ' no GPS coordinates, so ' . ($noGps === 1 ? 'it' : 'they') . ' can\'t appear on the map — add coordinates on the site\'s Edit form.';
+}
+$respond(true, $message, 200, [
+    'status' => $status, 'color' => connectivity_statuses()[$status]['color'], 'changed' => $n, 'no_gps' => $noGps,
 ]);

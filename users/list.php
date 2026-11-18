@@ -61,9 +61,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $isSuperAdminFlag = ($isSuperAdmin && isset($_POST['is_super_admin'])) ? 1 : 0;
 
     if ($id > 0) {
-        $existing = $pdo->prepare('SELECT role FROM users WHERE id = ?');
+        $existing = $pdo->prepare('SELECT role, auth_source FROM users WHERE id = ?');
         $existing->execute([$id]);
-        $existingRole = $existing->fetchColumn();
+        $existingRow = $existing->fetch() ?: [];
+        $existingRole = $existingRow['role'] ?? false;
+        if (($existingRow['auth_source'] ?? 'local') === 'ad') {
+            $password = ''; // directory accounts have no local password
+        }
         if ($existingRole === 'admin' && !$isSuperAdmin) {
             flash('error', 'Only a super admin account can manage admin-tier accounts.');
             redirect('/users/list.php');
@@ -154,10 +158,19 @@ include __DIR__ . '/../includes/header.php';
                     <?php endforeach; ?>
                 </select>
             </div>
+            <?php if (($editing['auth_source'] ?? 'local') === 'ad'): ?>
+            <div class="field">
+                <label>Sign-in</label>
+                <div class="hint" style="margin-top:6px;">Active Directory account &mdash; password is managed in AD.
+                    <?= $editing['role_source'] === 'directory' ? '<strong>Role follows AD group mappings</strong>; a role chosen here is replaced at the next sign-in or sync.' : 'Role is set manually.' ?>
+                    <?php if ($isSuperAdmin): ?><a href="<?= APP_BASE_URL ?>/users/directory.php">Directory Access</a><?php endif; ?></div>
+            </div>
+            <?php else: ?>
             <div class="field">
                 <label for="password"><?= $editing ? 'Reset password (optional)' : 'Password' ?></label>
                 <input type="password" id="password" name="password" <?= $editing ? '' : 'required' ?>>
             </div>
+            <?php endif; ?>
             <div class="field">
                 <label for="is_active">Active</label>
                 <select id="is_active" name="is_active">
@@ -239,15 +252,16 @@ include __DIR__ . '/../includes/header.php';
 <div class="card">
     <div class="table-wrap">
     <table>
-        <thead><tr><th>Username</th><th>Full name</th><th>Role</th><th>Active</th><th>Password</th><th>Login</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Username</th><th>Full name</th><th>Role</th><th>Sign-in</th><th>Active</th><th>Password</th><th>Login</th><th>Created</th><th></th></tr></thead>
         <tbody>
         <?php foreach ($users as $u): $isLocked = $u['locked_until'] && strtotime($u['locked_until']) > time(); $canEditRow = $isSuperAdmin || $u['role'] !== 'admin'; ?>
             <tr>
                 <td><?= e($u['username']) ?></td>
                 <td><?= e($u['full_name']) ?></td>
                 <td><?= user_role_badge($u) ?></td>
+                <td><?= $u['auth_source'] === 'ad' ? '<span class="badge badge-open" title="Signs in with Active Directory">AD</span>' : '<span class="hint">Local</span>' ?></td>
                 <td><?= $u['is_active'] ? 'Yes' : 'No' ?></td>
-                <td><?= $u['must_change_password'] ? '<span class="badge badge-progress">Must change</span>' : '<span class="hint">OK</span>' ?></td>
+                <td><?= $u['auth_source'] === 'ad' ? '<span class="hint">In AD</span>' : ($u['must_change_password'] ? '<span class="badge badge-progress">Must change</span>' : '<span class="hint">OK</span>') ?></td>
                 <td><?= $isLocked ? '<span class="badge badge-overdue">Locked until ' . e(format_datetime($u['locked_until'])) . '</span>' : '<span class="hint">OK</span>' ?></td>
                 <td><?= format_date($u['created_at']) ?></td>
                 <td><?= $canEditRow ? '<a href="?edit=' . (int)$u['id'] . '">Edit</a>' : '<span class="hint">Super admin only</span>' ?></td>

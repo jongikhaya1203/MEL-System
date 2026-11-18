@@ -837,6 +837,75 @@ is treated as bulk PII export and stays admin/manager only — verified
 live: a `indigent_capturer` account gets 200 exporting one record but 403
 exporting three.
 
+## Digital Transformation (Programmes > Digital Transformation)
+
+Workstreams: **ERP Beam Implementation**, USAASA MEL System, E-Procurement,
+Service Desk and Network Tool (`digital/project.php?p=<slug>`). Each holds a
+register of deliverables. ERP's register is split into the **ERP Blueprint
+Deliverables Checklist** (18 documents) and the **Data Migration Blueprint**
+(12 elements), both seeded by `database/schema.sql`. Admins/managers can add
+deliverables to any register.
+
+- **Attach (POE)**: admins, managers and any assigned governance signatory
+  attach a document (PDF, Office, Visio, MS Project, PNG/JPG, 25 MB max) to a
+  deliverable. Versions are append-only; a new version restarts sign-off.
+  Files live in `storage/dt_documents/` (deny-all) and are served through
+  `digital/download.php` only. A SHA-256 fingerprint is kept per version.
+- **Sign-off route**: each deliverable has an ordered route of governance
+  bodies. The document waits on the first body that hasn't endorsed the
+  current version; only that body's assigned signatories can endorse (drawn
+  signature + declaration) or reject (reason required). A rejection stops
+  the route until a corrected version is attached. Signatories see their
+  queue under **My Sign-offs** (sidebar badge) and are emailed when a
+  document reaches them, if SMTP is enabled.
+- **Governance & Accountability** (`digital/governance.php`): the eight
+  bodies (Executive Steering Committee, CIO, CFO, HR, Supply Chain, Business
+  Process Owners, Implementation Partner, Internal Audit), their signatories,
+  and an owner/approver matrix for every deliverable.
+- **Super admin**: adds governance bodies (e.g. Executive: Corporate
+  Services), assigns signatories, and edits each route under **Approval
+  Workflows** — including applying one route to many deliverables at once.
+  Seeded routes are defaults; once a route is edited, re-importing
+  `schema.sql` never overwrites it.
+
+## Email & Notifications (super admin — `settings/email.php`)
+
+SMTP server, sender, Reply-To, and per-notification routing: switch each
+notification type on/off, CC extra people per type, BCC an archive mailbox
+on everything, and **test mode** (deliver everything to one UAT inbox, with
+the intended recipients listed in the message). All automated mail goes
+through `send_notification()` in `includes/mailer.php`; every attempt is in
+the delivery log. The SMTP password is stored AES-256-GCM encrypted (see
+below); an older plaintext value is encrypted the next time the form is saved.
+
+## Directory Access — Active Directory (super admin — `users/directory.php`)
+
+- **Connection**: domain controllers (failover in order), LDAPS / STARTTLS,
+  certificate verification, base DN, a read-only service account (password
+  encrypted), UPN suffix. *Test connection* and *Test a user* show exactly
+  how a login would resolve, without signing anyone in.
+- **Group → role mappings**: members of an AD security group (nested
+  membership included) get a MEL role, and optionally become signatories of
+  a Digital Transformation governance body. Lowest priority number wins.
+  Mappings never grant Super Admin.
+- **Search & grant**: find people in AD and grant access, either following
+  their AD groups or with a manual role. A matching local account is linked
+  rather than duplicated. Optional auto-provisioning on first sign-in.
+- **Sign-in**: AD-linked users sign in with their network password (`jsmith`,
+  `USAASA\jsmith` or UPN); no local password is stored or usable. Local
+  accounts always keep working, so a super admin can get in if AD is down.
+  A directory outage doesn't count towards account lockout.
+- **Sync** (`Sync all now`, or schedule `cron/ad_sync.php` nightly) refreshes
+  names, emails and group-based roles, and deactivates users who are
+  disabled/deleted in AD or no longer in a mapped group. Revoked users stay
+  revoked. Every grant, revoke, sign-in failure and sync change is in the
+  **Audit log** tab.
+
+**Encryption key**: stored credentials are encrypted with the key in
+`config/app_key.php`, created automatically on first use and git-ignored.
+Back it up with the database — without it, the SMTP and AD service passwords
+must be re-entered.
+
 ## Email notifications (SMTP)
 
 The installer who submitted a site gets emailed whenever its status
